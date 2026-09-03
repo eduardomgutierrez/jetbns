@@ -91,3 +91,45 @@ python examples/explore_npc_parameter_space.py
 ```
 
 It writes a diagnostic plot and HDF5 summary under `examples/output/`.
+
+## Numerical-ejecta screening
+
+A separate screening used the polar bin (`itheta=00000`) from six locally
+available, physically valid WhiskyTHC-style outflow histories: DD2 equal-mass,
+DD2 asymmetric, BLh, two SFHo configurations, and SLy. The grid varied launch
+time (`0.1`, `0.3`, `1`, `3` s), isotropic-equivalent luminosity (`1e49` through
+`1e52` erg/s), and Gaussian velocity-kernel width (`0.02`, `0.035`, `0.05`),
+giving 288 trajectories.
+
+The HDF5 loader was corrected before this run: mass flux stored for an angular
+bin is now calculated with that bin's solid angle and converted to an
+isotropic-equivalent value exactly once during reconstruction. The previous
+implementation applied `4*pi/solid_angle` twice and overestimated the polar
+density by about three orders of magnitude.
+
+Of the 288 numerical trajectories, 131 enter the adopted NPC region and 70 both
+enter it and reach the ejecta edge within the 12-second integration window.
+Across compatible samples:
+
+- `Gamma_rel` ranges from 3.95 to 46.1;
+- `tau_pn` ranges from 0.107 to 1.999;
+- `xi(1)` ranges from `6.9e6` to `2.1e9`;
+- downstream `k_B T_d` ranges from 0.53 to 2.60 keV.
+
+Compatibility counts are 2, 22, 53, and 54 for luminosities `1e49`, `1e50`,
+`1e51`, and `1e52` erg/s, respectively. Kernel widths `0.02`, `0.035`, and
+`0.05` give 57, 45, and 29 compatible trajectories: a broader reconstructed
+fast tail keeps the upstream column denser and generally hurts compatibility.
+
+These are screening results, not validated predictions. The local files are
+not the exact `outflow_data/more` paths referenced by the paper-era notebooks;
+their redistribution status is unknown. The clean loader currently uses the
+recorded velocity rather than a Bernoulli-derived asymptotic velocity and
+power-law extrapolates the outflow after the recorded history. Those choices
+must be tested before publication use.
+
+Run the numerical screening by passing one or more source files:
+
+```bash
+python examples/explore_npc_numerical.py path/to/lagrangian_profile.h5
+```

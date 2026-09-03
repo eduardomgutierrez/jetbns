@@ -134,4 +134,15 @@ jet power, and tail exponent. Its assumptions, results, and the current finite-
 tail boundary caveat are documented in
 [`docs/np_converter_parameter_study.md`](docs/np_converter_parameter_study.md).
 
+Numerical ejecta profiles can be screened with the same NPC criteria by passing
+one or more WhiskyTHC-style HDF5 files. The angular-bin solid angle is inferred
+from the file's `theta` grid:
+
+```bash
+python examples/explore_npc_numerical.py path/to/lagrangian_profile.h5
+```
+
+This writes `npc_numerical_sweep.png` and `npc_numerical_sweep.h5` under
+`examples/output/`. Numerical data are not bundled with the repository.
+
 Plots are written under `examples/output/`, which is ignored by Git.
