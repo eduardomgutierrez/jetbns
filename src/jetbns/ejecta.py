@@ -291,25 +291,7 @@ class OutflowHistory:
         object.__setattr__(self, "mass_loss_rate_g_s", mass_rate)
 
     @classmethod
-    def from_csv(cls, path: str | Path, *, solid_angle_sr: float = 4.0 * np.pi) -> OutflowHistory:
-        """Load named columns from a portable CSV outflow file."""
-        data = np.genfromtxt(path, delimiter=",", names=True)
-        required = {"time_s", "velocity_c", "mass_loss_rate_g_s"}
-        names = set(data.dtype.names or ())
-        missing = required - names
-        if missing:
-            raise ValueError(f"missing CSV columns: {', '.join(sorted(missing))}")
-        ye = data["electron_fraction"] if "electron_fraction" in names else None
-        return cls(
-            data["time_s"],
-            data["velocity_c"],
-            data["mass_loss_rate_g_s"],
-            ye,
-            solid_angle_sr,
-        )
-
-    @classmethod
-    def from_legacy_hdf5(
+    def from_hdf5(
         cls,
         path: str | Path,
         *,
@@ -317,15 +299,13 @@ class OutflowHistory:
         extraction_radius_cm: float,
         solid_angle_sr: float = 4.0 * np.pi,
     ) -> OutflowHistory:
-        """Load one angular bin from a legacy WhiskyTHC-style HDF5 file.
+        """Load one angular bin from a WhiskyTHC-style HDF5 file.
 
-        The legacy file stores density and velocity rather than mass flux.
-        Importing this method requires the optional ``hdf5`` dependency.
+        The file stores density and velocity rather than mass flux. The latter
+        is reconstructed at the supplied extraction radius. HDF5 is the
+        standard persisted numerical-input format for this project.
         """
-        try:
-            import h5py
-        except ImportError as error:  # pragma: no cover - environment dependent
-            raise ImportError("install jetbns[hdf5] to read legacy HDF5 files") from error
+        import h5py
         with h5py.File(path, "r") as handle:
             group = handle[bin_name]
             time = np.asarray(group["time"], dtype=float)
@@ -367,6 +347,25 @@ class NumericalEjecta(Ejecta):
             raise ValueError("extraction_radius_cm and beta_width must be positive")
         if self.integration_samples < 16:
             raise ValueError("integration_samples must be at least 16")
+
+    @classmethod
+    def from_hdf5(
+        cls,
+        path: str | Path,
+        *,
+        bin_name: str = "itheta=00000",
+        extraction_radius_cm: float = 4.42e7,
+        solid_angle_sr: float = 4.0 * np.pi,
+        **kwargs: float,
+    ) -> NumericalEjecta:
+        """Construct a numerical ejecta model directly from an HDF5 bin."""
+        history = OutflowHistory.from_hdf5(
+            path,
+            bin_name=bin_name,
+            extraction_radius_cm=extraction_radius_cm,
+            solid_angle_sr=solid_angle_sr,
+        )
+        return cls(history, extraction_radius_cm=extraction_radius_cm, **kwargs)
 
     def inner_radius(self, time: float) -> float:
         if time <= self.history.time_s[0]:

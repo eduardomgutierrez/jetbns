@@ -1,7 +1,5 @@
 """Plot density and velocity profiles for the three initial ejecta models."""
 
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -10,13 +8,20 @@ from jetbns.constants import SPEED_OF_LIGHT
 
 
 def main() -> None:
+    from pathlib import Path
+
     root = Path(__file__).resolve().parents[1]
     time = 0.2
     models = {
         "single power law": HomologousPowerLaw(),
         "broken + tail": BrokenPowerLaw(tail=True),
         "numerical example": NumericalEjecta(
-            OutflowHistory.from_csv(root / "data" / "example_outflow.csv")
+            OutflowHistory(
+                time_s=np.array([0.005, 0.01, 0.02, 0.04, 0.08]),
+                velocity_c=np.array([0.42, 0.38, 0.34, 0.29, 0.24]),
+                mass_loss_rate_g_s=np.array([3e31, 2.5e31, 1.8e31, 1.1e31, 5e30]),
+                electron_fraction=np.array([0.08, 0.09, 0.10, 0.12, 0.15]),
+            )
         ),
     }
     figure, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)

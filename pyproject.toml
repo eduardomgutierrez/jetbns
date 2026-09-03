@@ -14,14 +14,13 @@ classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
 ]
 dependencies = [
+  "h5py>=3.8",
   "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
 plots = ["matplotlib>=3.7"]
-hdf5 = ["h5py>=3.8"]
 dev = [
-  "h5py>=3.8",
   "matplotlib>=3.7",
   "pytest>=8",
   "ruff>=0.6",
