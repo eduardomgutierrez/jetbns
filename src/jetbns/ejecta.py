@@ -301,9 +301,10 @@ class OutflowHistory:
     ) -> OutflowHistory:
         """Load one angular bin from a WhiskyTHC-style HDF5 file.
 
-        The file stores density and velocity rather than mass flux. The latter
-        is reconstructed at the supplied extraction radius. HDF5 is the
-        standard persisted numerical-input format for this project.
+        The file stores local density and velocity rather than angular-bin mass
+        flux. The latter is reconstructed as ``rho Gamma v r^2 solid_angle``
+        at the supplied extraction radius. HDF5 is the standard persisted
+        numerical-input format for this project.
         """
         import h5py
         with h5py.File(path, "r") as handle:
@@ -317,9 +318,8 @@ class OutflowHistory:
                 * gamma
                 * velocity
                 * SPEED_OF_LIGHT
-                * 4.0
-                * np.pi
                 * extraction_radius_cm**2
+                * solid_angle_sr
             )
             ye = np.asarray(group["ye"], dtype=float) if "ye" in group else None
         return cls(time, velocity, mass_rate, ye, solid_angle_sr)
