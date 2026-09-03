@@ -9,4 +9,6 @@ dist/
 examples/output/
 .DS_Store
 *.ipynb_checkpoints/
-
+AGENTS.md
+PROJECT_CONTEXT.md
+NEXT_STEPS.md

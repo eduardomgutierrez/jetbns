@@ -98,6 +98,4 @@ pytest
 ruff check .
 ```
 
-Plots are written under `examples/output/`, which is ignored by Git. See
-`PROJECT_CONTEXT.md` for model assumptions and `NEXT_STEPS.md` for the exact
-handoff state.
+Plots are written under `examples/output/`, which is ignored by Git.
