@@ -25,6 +25,9 @@ def main() -> None:
         axes[0].loglog(radius, model.density(radius, time), label=label)
         axes[1].semilogx(radius, model.velocity(radius, time) / SPEED_OF_LIGHT, label=label)
     axes[0].set(xlabel="radius [cm]", ylabel=r"density [g cm$^{-3}$]")
+    # The exponential tail is evaluated down to machine-small densities. Those
+    # values are numerically valid but visually compress the useful profiles.
+    axes[0].set_ylim(1.0, 3.0e8)
     axes[1].set(xlabel="radius [cm]", ylabel=r"velocity $v/c$")
     axes[1].set_ylim(0, 0.7)
     axes[0].legend()
