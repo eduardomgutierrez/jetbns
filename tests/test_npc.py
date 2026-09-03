@@ -61,17 +61,14 @@ def test_equations_match_hand_calculation() -> None:
     ambient_gamma = 1 / np.sqrt(1 - data.ambient_beta[index] ** 2)
     magnetic_field = 1.0e13 * (1.0e6 / radius) ** 2
     temperature = (
-        density
-        * SPEED_OF_LIGHT**2
-        * data.relative_lorentz_factor[index] ** 2
-        / RADIATION_CONSTANT
+        density * SPEED_OF_LIGHT**2 * data.relative_lorentz_factor[index] ** 2 / RADIATION_CONSTANT
     ) ** 0.25
-    gyration = ELEMENTARY_CHARGE * magnetic_field / (
-        PROTON_MASS * SPEED_OF_LIGHT**2 * number_density * PN_CROSS_SECTION
+    gyration = (
+        ELEMENTARY_CHARGE
+        * magnetic_field
+        / (PROTON_MASS * SPEED_OF_LIGHT**2 * number_density * PN_CROSS_SECTION)
     )
-    max_bh = 2 * ELECTRON_MASS * SPEED_OF_LIGHT**2 / (
-        6 * BOLTZMANN_CONSTANT * temperature
-    )
+    max_bh = 2 * ELECTRON_MASS * SPEED_OF_LIGHT**2 / (6 * BOLTZMANN_CONSTANT * temperature)
 
     assert data.upstream_number_density_cm3[index] == pytest.approx(number_density)
     assert data.upstream_magnetic_field_g[index] == pytest.approx(magnetic_field)
@@ -86,19 +83,14 @@ def test_equations_match_hand_calculation() -> None:
     assert data.max_lorentz_factor_bethe_heitler[index] == pytest.approx(max_bh)
     assert data.max_lorentz_factor[index] == pytest.approx(min(gyration, max_bh))
     assert data.max_observer_energy_erg[index] == pytest.approx(
-        data.head_lorentz_factor[index]
-        * min(gyration, max_bh)
-        * PROTON_MASS
-        * SPEED_OF_LIGHT**2
+        data.head_lorentz_factor[index] * min(gyration, max_bh) * PROTON_MASS * SPEED_OF_LIGHT**2
     )
 
 
 def test_breakout_is_excluded_and_remaining_path_is_supported() -> None:
     ejecta, result = make_solution()
     assert result.broke_out
-    data = evaluate_npc_inputs(
-        result, ejecta, config=NpcConfig(path_length="remaining_ejecta")
-    )
+    data = evaluate_npc_inputs(result, ejecta, config=NpcConfig(path_length="remaining_ejecta"))
     assert data.time_s.size == result.time_s.size - 1
     expected = np.array(
         [ejecta.outer_radius(t) - r for t, r in zip(data.time_s, data.radius_cm, strict=True)]
@@ -116,9 +108,7 @@ def test_composition_and_observer_boost_are_explicit() -> None:
         config=NpcConfig(target_nucleon_fraction=0.5),
         observer_lorentz_factor=2.0,
     )
-    assert half.upstream_number_density_cm3 == pytest.approx(
-        0.5 * full.upstream_number_density_cm3
-    )
+    assert half.upstream_number_density_cm3 == pytest.approx(0.5 * full.upstream_number_density_cm3)
     assert half.pn_optical_depth == pytest.approx(0.5 * full.pn_optical_depth)
     assert half.gyration_parameter == pytest.approx(2.0 * full.gyration_parameter)
     assert np.all(half.observer_lorentz_factor == 2.0)
@@ -158,10 +148,9 @@ def test_configuration_rejects_invalid_physics(kwargs) -> None:
 def test_gyration_parameter_uses_published_c_squared_expression() -> None:
     ejecta, result = make_solution()
     data = evaluate_npc_inputs(result, ejecta)
-    expected = ELEMENTARY_CHARGE * data.upstream_magnetic_field_g / (
-        PROTON_MASS
-        * SPEED_OF_LIGHT**2
-        * data.upstream_number_density_cm3
-        * PN_CROSS_SECTION
+    expected = (
+        ELEMENTARY_CHARGE
+        * data.upstream_magnetic_field_g
+        / (PROTON_MASS * SPEED_OF_LIGHT**2 * data.upstream_number_density_cm3 * PN_CROSS_SECTION)
     )
     assert data.gyration_parameter == pytest.approx(expected)

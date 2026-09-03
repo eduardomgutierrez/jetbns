@@ -98,8 +98,11 @@ A separate screening used the polar bin (`itheta=00000`) from six locally
 available, physically valid WhiskyTHC-style outflow histories: DD2 equal-mass,
 DD2 asymmetric, BLh, two SFHo configurations, and SLy. The grid varied launch
 time (`0.1`, `0.3`, `1`, `3` s), isotropic-equivalent luminosity (`1e49` through
-`1e52` erg/s), and Gaussian velocity-kernel width (`0.02`, `0.035`, `0.05`),
-giving 288 trajectories.
+`1e52` erg/s), and generalized-Gaussian velocity-kernel width (`0.02`, `0.035`,
+`0.05`). The original 288-trajectory run inadvertently applied a sharp cutoff
+in every case, even though varying the kernel width was described as changing
+the fast tail. That result is retained below as historical context but should
+not be interpreted as a comparison of cutoff modes.
 
 The HDF5 loader was corrected before this run: mass flux stored for an angular
 bin is now calculated with that bin's solid angle and converted to an
@@ -118,8 +121,20 @@ Across compatible samples:
 
 Compatibility counts are 2, 22, 53, and 54 for luminosities `1e49`, `1e50`,
 `1e51`, and `1e52` erg/s, respectively. Kernel widths `0.02`, `0.035`, and
-`0.05` give 57, 45, and 29 compatible trajectories: a broader reconstructed
-fast tail keeps the upstream column denser and generally hurts compatibility.
+`0.05` give 57, 45, and 29 compatible trajectories. This width dependence
+occurs within the nominal ejecta boundary; it is not evidence for the effect of
+retaining material above the recorded maximum velocity.
+
+The cleaned numerical model now explicitly supports `cutoff_mode="sharp"` and
+`cutoff_mode="smooth"`, corresponding to legacy `abrupt_cutoff=1` and `0`.
+It also exposes `kernel_shape`, corresponding to legacy `alpha`; shape 1 is an
+exponential and shape 2 is the paper-era Gaussian choice. A corrected run on
+the exact archived `DD2_M135135_M1_K2_SR/outflow_1_ber_out` profile evaluated 96
+trajectories (48 per cutoff mode), with 30 sharp and 29 smooth cases entering
+the adopted NPC region. This one-case count difference is not yet a robust tail
+result: as in the legacy propagation, breakout is still declared at the nominal
+fastest-shell radius, so the jet is not propagated through the retained smooth
+tail. The two density modes differ physically only beyond that nominal surface.
 
 These are screening results, not validated predictions. The local files are
 not the exact `outflow_data/more` paths referenced by the paper-era notebooks;

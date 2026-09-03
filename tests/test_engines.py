@@ -35,4 +35,3 @@ def test_power_law_engine_has_continuous_plateau_and_decline() -> None:
     assert engine.source_luminosity(0.1) == 2.0e49
     assert engine.source_luminosity(0.3) == pytest.approx(2.0e49)
     assert engine.source_luminosity(0.5) == pytest.approx(0.5e49)
-

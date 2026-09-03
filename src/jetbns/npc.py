@@ -153,9 +153,7 @@ def relative_lorentz_factor(head_beta: ArrayLike, ambient_beta: ArrayLike) -> Fl
     r"""Return ``Gamma_h Gamma_e (1 - beta_h beta_e)`` (notes equation 31)."""
     head = np.asarray(head_beta, dtype=float)
     ambient = np.asarray(ambient_beta, dtype=float)
-    return np.asarray(
-        lorentz_factor(head) * lorentz_factor(ambient) * (1.0 - head * ambient)
-    )
+    return np.asarray(lorentz_factor(head) * lorentz_factor(ambient) * (1.0 - head * ambient))
 
 
 def evaluate_npc_inputs(
@@ -202,9 +200,9 @@ def evaluate_npc_inputs(
     ambient_gamma = np.asarray(lorentz_factor(ambient_beta))
     relative_gamma = relative_lorentz_factor(head_beta, ambient_beta)
     number_density = density * config.target_nucleon_fraction / PROTON_MASS
-    magnetic_field = config.magnetic_field_at_reference_g * (
-        config.magnetic_reference_radius_cm / radius
-    ) ** 2
+    magnetic_field = (
+        config.magnetic_field_at_reference_g * (config.magnetic_reference_radius_cm / radius) ** 2
+    )
     if config.path_length == "radius":
         path_length = radius.copy()
     else:
@@ -214,21 +212,19 @@ def evaluate_npc_inputs(
         if np.any(path_length < 0):
             raise ValueError("trajectory extends beyond the ejecta outer boundary")
 
-    optical_depth = (
-        number_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
+    optical_depth = number_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
+    gyration = (
+        ELEMENTARY_CHARGE
+        * magnetic_field
+        / (PROTON_MASS * SPEED_OF_LIGHT**2 * number_density * config.pn_cross_section_cm2)
     )
-    gyration = ELEMENTARY_CHARGE * magnetic_field / (
-        PROTON_MASS
-        * SPEED_OF_LIGHT**2
-        * number_density
-        * config.pn_cross_section_cm2
-    )
-    temperature = (
-        density * SPEED_OF_LIGHT**2 * relative_gamma**2 / RADIATION_CONSTANT
-    ) ** 0.25
+    temperature = (density * SPEED_OF_LIGHT**2 * relative_gamma**2 / RADIATION_CONSTANT) ** 0.25
     temperature_kev = BOLTZMANN_CONSTANT * temperature / ERG_PER_KEV
-    max_bh = 2.0 * ELECTRON_MASS * SPEED_OF_LIGHT**2 / (
-        config.bethe_heitler_wien_factor * BOLTZMANN_CONSTANT * temperature
+    max_bh = (
+        2.0
+        * ELECTRON_MASS
+        * SPEED_OF_LIGHT**2
+        / (config.bethe_heitler_wien_factor * BOLTZMANN_CONSTANT * temperature)
     )
     max_gyration = gyration.copy()
     maximum = np.minimum(max_bh, max_gyration)

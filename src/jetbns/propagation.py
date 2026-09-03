@@ -78,9 +78,7 @@ class JetHead:
             * ambient_gamma**2
         )
         effective = self.calibration**2 * tilde_l
-        head_beta = ambient_beta + (self.engine.beta - ambient_beta) / (
-            1.0 + effective**-0.5
-        )
+        head_beta = ambient_beta + (self.engine.beta - ambient_beta) / (1.0 + effective**-0.5)
         return float(head_beta), ambient_beta, float(effective)
 
     def propagate(
@@ -146,4 +144,3 @@ class JetHead:
             dimensionless_luminosity=state_array[:, 2],
             broke_out=broke_out,
         )
-

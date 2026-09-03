@@ -120,4 +120,3 @@ class PowerLawEngine(Engine):
             active &= age <= self.duration_s
         result = np.where(active, result, 0.0)
         return _return_like_input(result, time)
-

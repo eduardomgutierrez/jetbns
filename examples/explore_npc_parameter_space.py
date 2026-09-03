@@ -74,9 +74,17 @@ def main() -> None:
         )
 
     names = (
-        "mass_msun", "launch_time_s", "luminosity_iso_erg_s", "tail_exponent",
-        "broke_out", "sample_time_s", "sample_radius_cm", "relative_lorentz_factor",
-        "pn_optical_depth", "gyration_parameter", "npc_distance",
+        "mass_msun",
+        "launch_time_s",
+        "luminosity_iso_erg_s",
+        "tail_exponent",
+        "broke_out",
+        "sample_time_s",
+        "sample_radius_cm",
+        "relative_lorentz_factor",
+        "pn_optical_depth",
+        "gyration_parameter",
+        "npc_distance",
     )
     table = np.asarray(rows)
     output = Path(__file__).resolve().parent / "output"
@@ -96,7 +104,10 @@ def main() -> None:
     axis.axvspan(0.1, 2, color="tab:green", alpha=0.12, label=r"target $\tau_{pn}$")
     axis.axhspan(1, xi_upper, color="tab:orange", alpha=0.08, label=r"target $\xi(1)$")
     axis.set(
-        xscale="log", yscale="log", xlabel=r"$\tau_{pn}$", ylabel=r"$\xi(1)$",
+        xscale="log",
+        yscale="log",
+        xlabel=r"$\tau_{pn}$",
+        ylabel=r"$\xi(1)$",
         title="Closest NPC conditions in 320 jet/ejecta scenarios",
     )
     axis.set_ylim(0.3, xi_upper)
@@ -104,9 +115,7 @@ def main() -> None:
     axis.legend()
     figure.savefig(output / "npc_parameter_sweep.png", dpi=180)
 
-    compatible = (table[:, 7] > 2) & (table[:, 8] >= 0.1) & (table[:, 8] <= 2) & (
-        table[:, 9] > 1
-    )
+    compatible = (table[:, 7] > 2) & (table[:, 8] >= 0.1) & (table[:, 8] <= 2) & (table[:, 9] > 1)
     best = table[np.argmin(table[:, 10])]
     print(f"evaluated {len(table)} scenarios; fully compatible: {compatible.sum()}")
     print(dict(zip(names, best, strict=True)))

@@ -13,6 +13,7 @@ from jetbns import ConstantEngine, JetHead, NumericalEjecta, evaluate_npc_inputs
 LAUNCH_TIMES_S = (0.1, 0.3, 1.0, 3.0)
 LUMINOSITIES_ISO = (1e49, 1e50, 1e51, 1e52)
 BETA_WIDTHS = (0.02, 0.035, 0.05)
+CUTOFF_MODES = ("sharp", "smooth")
 
 
 def solid_angle(path: Path, bin_name: str) -> float:
@@ -43,57 +44,80 @@ def main() -> None:
     for profile in args.profiles:
         omega = solid_angle(profile, args.bin_name)
         for width in BETA_WIDTHS:
-            ejecta = NumericalEjecta.from_hdf5(
-                profile,
-                bin_name=args.bin_name,
-                extraction_radius_cm=4.42e7,
-                solid_angle_sr=omega,
-                beta_width=width,
-                integration_samples=96,
-            )
-            for launch in LAUNCH_TIMES_S:
-                for luminosity in LUMINOSITIES_ISO:
-                    engine = ConstantEngine.from_isotropic_equivalent(
-                        luminosity,
-                        launch_time_s=launch,
-                        launch_radius_cm=8.45e7,
-                        opening_angle_rad=np.deg2rad(10),
-                        lorentz_factor=100,
-                    )
-                    try:
-                        trajectory = JetHead(engine, ejecta).propagate(
-                            max_time_s=launch + 12, time_step_s=1e-2
+            for cutoff_mode in CUTOFF_MODES:
+                ejecta = NumericalEjecta.from_hdf5(
+                    profile,
+                    bin_name=args.bin_name,
+                    extraction_radius_cm=4.42e7,
+                    solid_angle_sr=omega,
+                    beta_width=width,
+                    kernel_shape=2.0,
+                    cutoff_mode=cutoff_mode,
+                    integration_samples=96,
+                )
+                for launch in LAUNCH_TIMES_S:
+                    for luminosity in LUMINOSITIES_ISO:
+                        engine = ConstantEngine.from_isotropic_equivalent(
+                            luminosity,
+                            launch_time_s=launch,
+                            launch_radius_cm=8.45e7,
+                            opening_angle_rad=np.deg2rad(10),
+                            lorentz_factor=100,
                         )
-                        data = evaluate_npc_inputs(trajectory, ejecta)
-                    except ValueError as error:
-                        failures += 1
-                        print(f"skipped {profile.name}, t={launch}, L={luminosity:g}: {error}")
-                        continue
-                    distance = npc_distance(
-                        data.relative_lorentz_factor,
-                        data.pn_optical_depth,
-                        data.gyration_parameter,
-                    )
-                    index = int(np.argmin(distance))
-                    rows.append(
-                        (
-                            str(profile), launch, luminosity, width, trajectory.broke_out,
-                            data.time_s[index], data.radius_cm[index],
-                            data.relative_lorentz_factor[index], data.pn_optical_depth[index],
-                            data.gyration_parameter[index],
-                            data.downstream_temperature_kev[index], distance[index],
+                        try:
+                            trajectory = JetHead(engine, ejecta).propagate(
+                                max_time_s=launch + 12, time_step_s=1e-2
+                            )
+                            data = evaluate_npc_inputs(trajectory, ejecta)
+                        except ValueError as error:
+                            failures += 1
+                            print(
+                                f"skipped {profile.name}, {cutoff_mode}, "
+                                f"t={launch}, L={luminosity:g}: {error}"
+                            )
+                            continue
+                        distance = npc_distance(
+                            data.relative_lorentz_factor,
+                            data.pn_optical_depth,
+                            data.gyration_parameter,
                         )
-                    )
+                        index = int(np.argmin(distance))
+                        rows.append(
+                            (
+                                str(profile),
+                                cutoff_mode,
+                                launch,
+                                luminosity,
+                                width,
+                                trajectory.broke_out,
+                                data.time_s[index],
+                                data.radius_cm[index],
+                                data.relative_lorentz_factor[index],
+                                data.pn_optical_depth[index],
+                                data.gyration_parameter[index],
+                                data.downstream_temperature_kev[index],
+                                distance[index],
+                            )
+                        )
     if not rows:
         raise RuntimeError("no numerical trajectories could be evaluated")
 
     names = (
-        "profile", "launch_time_s", "luminosity_iso_erg_s", "beta_width", "broke_out",
-        "sample_time_s", "sample_radius_cm", "relative_lorentz_factor",
-        "pn_optical_depth", "gyration_parameter", "downstream_temperature_kev",
+        "profile",
+        "cutoff_mode",
+        "launch_time_s",
+        "luminosity_iso_erg_s",
+        "beta_width",
+        "broke_out",
+        "sample_time_s",
+        "sample_radius_cm",
+        "relative_lorentz_factor",
+        "pn_optical_depth",
+        "gyration_parameter",
+        "downstream_temperature_kev",
         "npc_distance",
     )
-    numeric = np.asarray([row[1:] for row in rows], dtype=float)
+    numeric = np.asarray([row[2:] for row in rows], dtype=float)
     output = Path(__file__).resolve().parent / "output"
     output.mkdir(exist_ok=True)
     with h5py.File(output / "npc_numerical_sweep.h5", "w") as handle:
@@ -102,24 +126,45 @@ def main() -> None:
         handle.attrs["failed_runs"] = failures
         text_type = h5py.string_dtype("utf-8")
         handle.create_dataset("profile", data=[row[0] for row in rows], dtype=text_type)
-        for index, name in enumerate(names[1:]):
+        handle.create_dataset("cutoff_mode", data=[row[1] for row in rows], dtype=text_type)
+        for index, name in enumerate(names[2:]):
             handle.create_dataset(name, data=numeric[:, index])
 
     figure, axis = plt.subplots(figsize=(7, 5), constrained_layout=True)
-    points = axis.scatter(numeric[:, 7], numeric[:, 8], c=numeric[:, 6], cmap="viridis")
+    modes = np.asarray([row[1] for row in rows])
+    points = None
+    for cutoff_mode, marker in (("sharp", "o"), ("smooth", "x")):
+        selected = modes == cutoff_mode
+        points = axis.scatter(
+            numeric[selected, 7],
+            numeric[selected, 8],
+            c=numeric[selected, 6],
+            cmap="viridis",
+            vmin=numeric[:, 6].min(),
+            vmax=numeric[:, 6].max(),
+            marker=marker,
+            label=f"{cutoff_mode} cutoff",
+        )
     axis.axvspan(0.1, 2, color="tab:green", alpha=0.12, label=r"target $\tau_{pn}$")
-    axis.axhspan(1, numeric[:, 8].max() * 3, color="tab:orange", alpha=0.08,
-                 label=r"target $\xi(1)$")
-    axis.set(xscale="log", yscale="log", xlabel=r"$\tau_{pn}$", ylabel=r"$\xi(1)$",
-             title=f"Numerical ejecta NPC screening: {len(rows)} trajectories")
+    axis.axhspan(
+        1, numeric[:, 8].max() * 3, color="tab:orange", alpha=0.08, label=r"target $\xi(1)$"
+    )
+    axis.set(
+        xscale="log",
+        yscale="log",
+        xlabel=r"$\tau_{pn}$",
+        ylabel=r"$\xi(1)$",
+        title=f"Numerical ejecta NPC screening: {len(rows)} trajectories",
+    )
     axis.set_ylim(0.3, numeric[:, 8].max() * 3)
+    assert points is not None
     figure.colorbar(points, ax=axis, label=r"$\Gamma_{\rm rel}$")
     axis.legend()
     figure.savefig(output / "npc_numerical_sweep.png", dpi=180)
 
-    compatible = (numeric[:, 6] > 2) & (numeric[:, 7] >= 0.1) & (
-        numeric[:, 7] <= 2
-    ) & (numeric[:, 8] > 1)
+    compatible = (
+        (numeric[:, 6] > 2) & (numeric[:, 7] >= 0.1) & (numeric[:, 7] <= 2) & (numeric[:, 8] > 1)
+    )
     best = int(np.argmin(numeric[:, 10]))
     print(f"evaluated {len(rows)} trajectories; failed: {failures}; compatible: {compatible.sum()}")
     print(dict(zip(names, rows[best], strict=True)))

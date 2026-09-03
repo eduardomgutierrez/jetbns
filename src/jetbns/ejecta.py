@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from math import gamma
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -129,11 +131,15 @@ class HomologousPowerLaw(Ejecta):
         radius_array = _array(radius)
         outer = self.outer_radius(time)
         n = self.density_index
-        normalization = self.mass_g * (3.0 - n) / (
-            4.0
-            * np.pi
-            * self.inner_radius_cm**n
-            * (outer ** (3.0 - n) - self.inner_radius_cm ** (3.0 - n))
+        normalization = (
+            self.mass_g
+            * (3.0 - n)
+            / (
+                4.0
+                * np.pi
+                * self.inner_radius_cm**n
+                * (outer ** (3.0 - n) - self.inner_radius_cm ** (3.0 - n))
+            )
         )
         density = normalization * (self.inner_radius_cm / radius_array) ** n
         inside = (radius_array >= self.inner_radius_cm) & (radius_array <= outer)
@@ -307,6 +313,7 @@ class OutflowHistory:
         numerical-input format for this project.
         """
         import h5py
+
         with h5py.File(path, "r") as handle:
             group = handle[bin_name]
             time = np.asarray(group["time"], dtype=float)
@@ -329,7 +336,11 @@ class OutflowHistory:
 class NumericalEjecta(Ejecta):
     """Ballistic reconstruction of a numerical outflow time series.
 
-    Each recorded launch epoch contributes a Gaussian distribution in beta.
+    Each recorded launch epoch contributes a generalized-Gaussian distribution
+    in beta. ``cutoff_mode="sharp"`` truncates it at the fastest recorded
+    shell; ``cutoff_mode="smooth"`` retains the exponential-like high-velocity
+    tail. ``outer_radius`` remains the nominal fastest-shell radius used by the
+    legacy jet-breakout calculation in both modes.
     The local density follows from mass conservation after free expansion. The
     history is isotropic-equivalent by default; a partial angular bin is scaled
     by ``4*pi/solid_angle_sr``.
@@ -338,13 +349,17 @@ class NumericalEjecta(Ejecta):
     history: OutflowHistory
     extraction_radius_cm: float = 4.42e7
     beta_width: float = 0.035
+    kernel_shape: float = 2.0
+    cutoff_mode: Literal["sharp", "smooth"] = "sharp"
     post_simulation_mass_index: float = 5.0 / 3.0
     post_simulation_velocity_index: float = 0.25
     integration_samples: int = 512
 
     def __post_init__(self) -> None:
-        if self.extraction_radius_cm <= 0 or self.beta_width <= 0:
-            raise ValueError("extraction_radius_cm and beta_width must be positive")
+        if self.extraction_radius_cm <= 0 or self.beta_width <= 0 or self.kernel_shape <= 0:
+            raise ValueError("extraction_radius_cm, beta_width, and kernel_shape must be positive")
+        if self.cutoff_mode not in ("sharp", "smooth"):
+            raise ValueError("cutoff_mode must be 'sharp' or 'smooth'")
         if self.integration_samples < 16:
             raise ValueError("integration_samples must be at least 16")
 
@@ -373,6 +388,7 @@ class NumericalEjecta(Ejecta):
         return self.extraction_radius_cm
 
     def outer_radius(self, time: float) -> float:
+        """Return the nominal boundary set by the fastest recorded parcel."""
         if time <= self.history.time_s[0]:
             raise ValueError("time must be later than the first outflow sample")
         launched = self.history.time_s < time
@@ -405,15 +421,17 @@ class NumericalEjecta(Ejecta):
         return launch_time, launch_beta, mass_rate * angular_scale
 
     def _moments(self, radius: float, time: float) -> tuple[float, float]:
-        if radius < self.extraction_radius_cm or radius > self.outer_radius(time):
+        if radius < self.extraction_radius_cm:
+            return 0.0, 0.0
+        if self.cutoff_mode == "sharp" and radius > self.outer_radius(time):
             return 0.0, 0.0
         launch_time, launch_beta, mass_rate = self._launch_grid(time)
         flight_time = time - launch_time
         beta = (radius - self.extraction_radius_cm) / (SPEED_OF_LIGHT * flight_time)
         valid = (beta > 0) & (beta < 1)
-        kernel = np.exp(-0.5 * ((beta - launch_beta) / self.beta_width) ** 2) / (
-            np.sqrt(2.0 * np.pi) * self.beta_width
-        )
+        scaled_offset = np.abs((beta - launch_beta) / self.beta_width)
+        normalization = self.kernel_shape / (2.0 * self.beta_width * gamma(1.0 / self.kernel_shape))
+        kernel = normalization * np.exp(-(scaled_offset**self.kernel_shape))
         gamma_inverse = np.sqrt(np.maximum(1.0 - beta**2, 0.0))
         weights = np.where(valid, mass_rate * kernel * gamma_inverse / flight_time, 0.0)
         denominator = float(np.trapezoid(weights, launch_time))
@@ -448,9 +466,8 @@ class NumericalEjecta(Ejecta):
         flat = radius_array.reshape(-1)
         result = np.zeros_like(flat)
         for index, current_radius in enumerate(flat):
-            outside = (
-                current_radius < self.extraction_radius_cm
-                or current_radius > self.outer_radius(time)
+            outside = current_radius < self.extraction_radius_cm or (
+                self.cutoff_mode == "sharp" and current_radius > self.outer_radius(time)
             )
             if outside:
                 continue
@@ -458,7 +475,7 @@ class NumericalEjecta(Ejecta):
             flight_time = time - launch_time
             beta = (current_radius - self.extraction_radius_cm) / (SPEED_OF_LIGHT * flight_time)
             valid = (beta > 0) & (beta < 1)
-            kernel = np.exp(-0.5 * ((beta - launch_beta) / self.beta_width) ** 2)
+            kernel = np.exp(-(np.abs((beta - launch_beta) / self.beta_width) ** self.kernel_shape))
             weights = np.where(valid, mass_rate * kernel / flight_time, 0.0)
             ye = np.interp(
                 np.minimum(launch_time, self.history.time_s[-1]),

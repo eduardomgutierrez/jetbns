@@ -49,6 +49,41 @@ def test_numerical_profile_is_physical_and_vectorized() -> None:
     assert np.all((electron_fraction >= 0) & (electron_fraction <= 1))
 
 
+def test_numerical_cutoff_modes_above_fastest_recorded_shell() -> None:
+    history = OutflowHistory(
+        time_s=np.array([0.005, 0.01, 0.02]),
+        velocity_c=np.array([0.40, 0.35, 0.30]),
+        mass_loss_rate_g_s=np.full(3, 1.0e30),
+        electron_fraction=np.full(3, 0.1),
+    )
+    sharp = NumericalEjecta(history, cutoff_mode="sharp", integration_samples=64)
+    smooth = NumericalEjecta(history, cutoff_mode="smooth", integration_samples=64)
+    time = 0.2
+    radius = 1.05 * sharp.outer_radius(time)
+
+    assert sharp.density(radius, time) == 0.0
+    assert sharp.velocity(radius, time) == 0.0
+    assert smooth.density(radius, time) > 0.0
+    assert smooth.velocity(radius, time) > 0.4 * SPEED_OF_LIGHT
+
+
+def test_numerical_kernel_shape_controls_tail_falloff() -> None:
+    history = OutflowHistory(
+        time_s=np.array([0.005, 0.01, 0.02]),
+        velocity_c=np.array([0.40, 0.35, 0.30]),
+        mass_loss_rate_g_s=np.full(3, 1.0e30),
+    )
+    exponential = NumericalEjecta(
+        history, cutoff_mode="smooth", kernel_shape=1.0, integration_samples=64
+    )
+    gaussian = NumericalEjecta(
+        history, cutoff_mode="smooth", kernel_shape=2.0, integration_samples=64
+    )
+    radius = 1.2 * exponential.outer_radius(0.2)
+
+    assert exponential.density(radius, 0.2) > gaussian.density(radius, 0.2)
+
+
 def test_hdf5_loader_is_the_persisted_input_path(tmp_path) -> None:
     import h5py
 
