@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -31,17 +29,14 @@ def test_smooth_tail_is_continuous_at_nominal_outer_radius() -> None:
     assert model.density(model.outer_radius(time) * 1.01, time) == 0.0
 
 
-def test_outflow_csv_round_trip_and_validation() -> None:
-    path = Path(__file__).parents[1] / "data" / "example_outflow.csv"
-    history = OutflowHistory.from_csv(path)
-    assert len(history.time_s) == 5
-    assert np.all(np.diff(history.time_s) > 0)
-    assert history.electron_fraction is not None
-
-
 def test_numerical_profile_is_physical_and_vectorized() -> None:
-    path = Path(__file__).parents[1] / "data" / "example_outflow.csv"
-    model = NumericalEjecta(OutflowHistory.from_csv(path), integration_samples=128)
+    history = OutflowHistory(
+        time_s=np.array([0.005, 0.01, 0.02, 0.04, 0.08]),
+        velocity_c=np.array([0.42, 0.38, 0.34, 0.29, 0.24]),
+        mass_loss_rate_g_s=np.array([3e31, 2.5e31, 1.8e31, 1.1e31, 5e30]),
+        electron_fraction=np.array([0.08, 0.09, 0.10, 0.12, 0.15]),
+    )
+    model = NumericalEjecta(history, integration_samples=128)
     time = 0.2
     radius = np.geomspace(model.inner_radius(time) * 1.01, model.outer_radius(time) * 0.99, 16)
     density = model.density(radius, time)
@@ -54,8 +49,9 @@ def test_numerical_profile_is_physical_and_vectorized() -> None:
     assert np.all((electron_fraction >= 0) & (electron_fraction <= 1))
 
 
-def test_legacy_hdf5_loader(tmp_path: Path) -> None:
-    h5py = pytest.importorskip("h5py")
+def test_hdf5_loader_is_the_persisted_input_path(tmp_path) -> None:
+    import h5py
+
     path = tmp_path / "outflow.h5"
     with h5py.File(path, "w") as handle:
         group = handle.create_group("itheta=00000")
@@ -63,7 +59,7 @@ def test_legacy_hdf5_loader(tmp_path: Path) -> None:
         group["vel"] = np.array([0.3, 0.25, 0.2]) * SPEED_OF_LIGHT
         group["rho"] = [1.0e5, 8.0e4, 6.0e4]
         group["ye"] = [0.1, 0.12, 0.15]
-    history = OutflowHistory.from_legacy_hdf5(
+    history = OutflowHistory.from_hdf5(
         path,
         bin_name="itheta=00000",
         extraction_radius_cm=4.42e7,
@@ -72,6 +68,15 @@ def test_legacy_hdf5_loader(tmp_path: Path) -> None:
     assert history.solid_angle_sr == 0.2
     assert history.velocity_c == pytest.approx([0.3, 0.25, 0.2])
     assert np.all(history.mass_loss_rate_g_s > 0)
+
+    model = NumericalEjecta.from_hdf5(
+        path,
+        bin_name="itheta=00000",
+        extraction_radius_cm=4.42e7,
+        solid_angle_sr=0.2,
+        integration_samples=32,
+    )
+    assert model.history.solid_angle_sr == 0.2
 
 
 @pytest.mark.parametrize(

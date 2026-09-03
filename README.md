@@ -20,8 +20,7 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-The base package requires only NumPy. Matplotlib is needed for examples, and
-h5py is needed only to import legacy WhiskyTHC HDF5 data.
+The base package requires NumPy and h5py. Matplotlib is needed for examples.
 
 ## Ejecta models
 
@@ -46,25 +45,24 @@ ejecta_with_tail = BrokenPowerLaw(
 )
 ```
 
-Numerical profiles are constructed from an outflow history. The portable CSV
-schema is:
-
-```text
-time_s,velocity_c,mass_loss_rate_g_s,electron_fraction
-```
+Persisted numerical profiles use the WhiskyTHC-style HDF5 format. Select the
+angular-bin group and state its extraction radius and solid angle explicitly:
 
 ```python
-from jetbns import NumericalEjecta, OutflowHistory
+from jetbns import NumericalEjecta
 
-history = OutflowHistory.from_csv("data/example_outflow.csv")
-ejecta = NumericalEjecta(history)
+ejecta = NumericalEjecta.from_hdf5(
+    "path/to/outflow.h5",
+    bin_name="itheta=00000",
+    extraction_radius_cm=4.42e7,
+    solid_angle_sr=0.2,
+)
 rho = ejecta.density(radius=1e9, time=0.2)
 ```
 
-The example dataset is synthetic and exists to demonstrate the interface; it
-must not be interpreted as simulation output. For the older WhiskyTHC layout,
-use `OutflowHistory.from_legacy_hdf5(...)` and specify the angular-bin group and
-extraction radius explicitly.
+`OutflowHistory` can still be constructed directly from in-memory arrays for
+synthetic tests and generated workflows. CSV file loading is intentionally not
+part of the API.
 
 ## Engine and jet-head propagation
 
