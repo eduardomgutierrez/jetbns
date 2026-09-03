@@ -19,23 +19,44 @@ extent of 3 combined with `max_beta = 0.6` creates a computational boundary
 moving at 1.8 times the speed of light. Results therefore test the tail shape
 only over this explicitly finite interval.
 
-## Result
+## Correction to the legacy gyration parameter
 
-None of the 320 scenarios simultaneously reaches
-`Gamma_rel > 2`, `0.1 <= tau_pn <= 2`, and `xi(1) > 1`. The most favorable
-sample has approximately:
+The first version of this study inherited an extra factor of `c` in the
+denominator of `xi(1)` from the local notes and `jetBNS3`. Equation 7 of
+Kashiyama, Murase & Meszaros (2013) instead gives
+
+```text
+xi(1) = e B_u / (sigma_pn m_p c^2 n_u).
+```
+
+Removing the extra factor raises every `xi(1)` by the speed of light,
+approximately `3e10`. HDF5 exports using the corrected definition have schema
+`jetbns.npc-inputs.v2`; version 1 values must not be used.
+
+## Corrected result
+
+Seven of the 320 scenarios simultaneously reach `Gamma_rel > 2`,
+`0.1 <= tau_pn <= 2`, and `xi(1) > 1`. One representative successful sample
+has approximately:
 
 - ejecta mass `1e-5` solar masses;
 - launch time 3 seconds;
 - isotropic-equivalent luminosity `1e50` erg/s;
 - tail exponent 16;
-- `Gamma_rel = 5.1`, `tau_pn = 0.67`, and `xi(1) = 4.9e-4`.
+- `Gamma_rel = 5.1`, `tau_pn = 0.67`, and `xi(1) = 1.5e7`.
+
+Four of the seven compatible trajectories also reach the configured finite
+tail edge within the integration interval. They all have `1e-5` solar masses,
+a 3-second launch, tail exponent 16, and luminosities from `1e50` through
+`1e53` erg/s. Three weaker-jet cases enter the target parameter region but do
+not reach that edge within 12 seconds after launch, so they must not be labeled
+successful jet breakouts.
 
 Thus the lower mass, later launch, and steep tail bring the optical depth into
-the desired range and a sufficient jet power raises the relative Lorentz
-factor, but the gyration condition remains short by about three orders of
-magnitude. In the entire grid, 172 scenarios reach `Gamma_rel > 2`, seven enter
-the desired optical-depth interval, and none reaches `xi(1) > 1`.
+the desired range, sufficient jet power raises the relative Lorentz factor,
+and the published gyration condition is easily satisfied. In the entire grid,
+172 scenarios reach `Gamma_rel > 2`, seven enter the desired optical-depth
+interval, and all 320 reach `xi(1) > 1` at some point.
 
 The parameter trends are physically coupled:
 
@@ -47,26 +68,21 @@ The parameter trends are physically coupled:
 - A steeper tail sharply lowers the terminal density. For the representative
   `1e-5` solar-mass, 1-second, `1e52` erg/s case, increasing the exponent from
   2 to 16 changes the near-breakout optical depth from about 331 to 10.5 and
-  raises `xi(1)` from `4.0e-6` to `1.2e-4`.
+  raises `xi(1)` from about `1.2e5` to `3.7e6`.
 
 The tension is visible directly from the adopted equations. Their product is
 
 ```text
-tau_pn * xi(1) = e B(r) Delta-r / (m_p c^3 Gamma_e).
+tau_pn * xi(1) = e B(r) Delta-r / (m_p c^2 Gamma_e).
 ```
 
 Density and the p-n cross-section cancel. With `Delta r = r` and
-`B(r) = B0 (r0/r)^2`, this product decreases as `1/r`. Reducing mass can move a
-trajectory along this relation, but cannot raise the product. At radii of order
-`1e10` cm with the fiducial field normalization, `tau_pn` in the desired range
-therefore implies `xi(1) << 1`.
-
-For confirmation, mathematically compatible solutions appear only for ejecta
-masses around `1e-14` to `5e-14` solar masses at the launch radius in this
-model, far below plausible merger ejecta masses. A larger magnetic
-normalization, a different radial field scaling, a shorter-radius interaction,
-or a revision of the assumed path/field equations is required to remove the
-tension. Those changes were not included in this sweep.
+`B(r) = B0 (r0/r)^2`, this product decreases as `1/r`; nevertheless, the
+corrected normalization is large enough that gyration is not restrictive in
+this grid. The main screening constraint is now obtaining `tau_pn` near unity,
+followed by the Bethe--Heitler maximum energy. The field normalization and
+radial scaling should still be varied because flux freezing is an uncertain
+BNS-ejecta assumption, not an input required by the original NPC paper.
 
 Run the reproducible screening with:
 

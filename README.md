@@ -113,6 +113,11 @@ boost is the jet-head Lorentz factor; a scalar or array can be supplied
 explicitly. This module does not perform particle injection, collision
 sampling, conversion cycles, transport, or spectral synthesis.
 
+`xi(1)` follows equation 7 of Kashiyama, Murase & Meszaros (2013),
+`e B / (sigma_pn m_p c^2 n)`. This corrects an extra factor of `c` in the local
+notes and legacy implementation. Corrected HDF5 files use schema version 2;
+schema-version-1 NPC files should be regenerated.
+
 ## Examples and tests
 
 ```bash

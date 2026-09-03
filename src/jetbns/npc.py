@@ -132,8 +132,11 @@ class NpcInputs:
         """Write a portable HDF5 table with per-dataset units and assumptions."""
         with h5py.File(path, "w") as handle:
             handle.attrs["description"] = "Deterministic inputs for an external NPC Monte Carlo"
-            handle.attrs["schema"] = "jetbns.npc-inputs.v1"
-            handle.attrs["source_equations"] = "local NPC notes, equations 31, 33, 38-43"
+            handle.attrs["schema"] = "jetbns.npc-inputs.v2"
+            handle.attrs["source_equations"] = (
+                "Kashiyama, Murase & Meszaros (2013), equation 7; "
+                "local NPC notes, equations 31, 33, 38-43"
+            )
             for field in fields(self):
                 dataset = handle.create_dataset(field.name, data=getattr(self, field.name))
                 dataset.attrs["unit"] = NPC_UNITS[field.name]
@@ -167,8 +170,10 @@ def evaluate_npc_inputs(
 
     This evaluates notes equations 31, 33, 38--43: ``Gamma_rel`` from the
     collinear relative motion, ``tau_pn = n sigma Delta-r / Gamma_e``,
-    ``B = B0 (r0/r)^2``, the notes' ``xi(1)`` expression, a radiation-dominated
-    shock temperature, and the Bethe--Heitler/gyration energy limits.
+    ``B = B0 (r0/r)^2``, the published ``xi(1) = e B / (sigma_pn m_p c^2 n)``,
+    a radiation-dominated shock temperature, and the Bethe--Heitler/gyration
+    energy limits.  The original paper's equation 7 is used instead of the
+    extra factor of ``c`` accidentally present in the legacy code and notes.
 
     The breakout sample is excluded by default because the upstream column ends
     there.  When no breakout occurred, all samples are retained.  A supplied
@@ -214,7 +219,7 @@ def evaluate_npc_inputs(
     )
     gyration = ELEMENTARY_CHARGE * magnetic_field / (
         PROTON_MASS
-        * SPEED_OF_LIGHT**3
+        * SPEED_OF_LIGHT**2
         * number_density
         * config.pn_cross_section_cm2
     )

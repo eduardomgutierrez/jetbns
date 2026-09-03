@@ -89,16 +89,17 @@ def main() -> None:
             handle.create_dataset(name, data=table[:, index])
 
     figure, axis = plt.subplots(figsize=(7, 5), constrained_layout=True)
+    xi_upper = table[:, 9].max() * 3
     points = axis.scatter(
         table[:, 8], table[:, 9], c=table[:, 7], s=18 + 2 * table[:, 3], cmap="viridis"
     )
     axis.axvspan(0.1, 2, color="tab:green", alpha=0.12, label=r"target $\tau_{pn}$")
-    axis.axhspan(1, 3, color="tab:orange", alpha=0.08, label=r"target $\xi(1)$")
+    axis.axhspan(1, xi_upper, color="tab:orange", alpha=0.08, label=r"target $\xi(1)$")
     axis.set(
         xscale="log", yscale="log", xlabel=r"$\tau_{pn}$", ylabel=r"$\xi(1)$",
         title="Closest NPC conditions in 320 jet/ejecta scenarios",
     )
-    axis.set_ylim(table[:, 9].min() / 3, 3)
+    axis.set_ylim(0.3, xi_upper)
     figure.colorbar(points, ax=axis, label=r"$\Gamma_{\rm rel}$")
     axis.legend()
     figure.savefig(output / "npc_parameter_sweep.png", dpi=180)

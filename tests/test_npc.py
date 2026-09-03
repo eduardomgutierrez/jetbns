@@ -67,7 +67,7 @@ def test_equations_match_hand_calculation() -> None:
         / RADIATION_CONSTANT
     ) ** 0.25
     gyration = ELEMENTARY_CHARGE * magnetic_field / (
-        PROTON_MASS * SPEED_OF_LIGHT**3 * number_density * PN_CROSS_SECTION
+        PROTON_MASS * SPEED_OF_LIGHT**2 * number_density * PN_CROSS_SECTION
     )
     max_bh = 2 * ELECTRON_MASS * SPEED_OF_LIGHT**2 / (
         6 * BOLTZMANN_CONSTANT * temperature
@@ -132,7 +132,7 @@ def test_hdf5_export_records_units_configuration_and_metadata(tmp_path) -> None:
     data.to_hdf5(output, config=config, metadata={"model": "test trajectory"})
 
     with h5py.File(output) as handle:
-        assert handle.attrs["schema"] == "jetbns.npc-inputs.v1"
+        assert handle.attrs["schema"] == "jetbns.npc-inputs.v2"
         assert handle["pn_optical_depth"].attrs["unit"] == "1"
         assert handle["upstream_density_g_cm3"].attrs["unit"] == "g cm^-3"
         assert handle["configuration"].attrs["path_length"] == "remaining_ejecta"
@@ -153,3 +153,15 @@ def test_hdf5_export_records_units_configuration_and_metadata(tmp_path) -> None:
 def test_configuration_rejects_invalid_physics(kwargs) -> None:
     with pytest.raises(ValueError):
         NpcConfig(**kwargs)
+
+
+def test_gyration_parameter_uses_published_c_squared_expression() -> None:
+    ejecta, result = make_solution()
+    data = evaluate_npc_inputs(result, ejecta)
+    expected = ELEMENTARY_CHARGE * data.upstream_magnetic_field_g / (
+        PROTON_MASS
+        * SPEED_OF_LIGHT**2
+        * data.upstream_number_density_cm3
+        * PN_CROSS_SECTION
+    )
+    assert data.gyration_parameter == pytest.approx(expected)
