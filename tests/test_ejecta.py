@@ -67,7 +67,15 @@ def test_hdf5_loader_is_the_persisted_input_path(tmp_path) -> None:
     )
     assert history.solid_angle_sr == 0.2
     assert history.velocity_c == pytest.approx([0.3, 0.25, 0.2])
-    assert np.all(history.mass_loss_rate_g_s > 0)
+    expected_mass_rate = (
+        np.array([1.0e5, 8.0e4, 6.0e4])
+        * (1 - np.array([0.3, 0.25, 0.2]) ** 2) ** -0.5
+        * np.array([0.3, 0.25, 0.2])
+        * SPEED_OF_LIGHT
+        * (4.42e7) ** 2
+        * 0.2
+    )
+    assert history.mass_loss_rate_g_s == pytest.approx(expected_mass_rate)
 
     model = NumericalEjecta.from_hdf5(
         path,
