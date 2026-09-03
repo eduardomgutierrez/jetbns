@@ -119,8 +119,14 @@ sampling, conversion cycles, transport, or spectral synthesis.
 python examples/plot_ejecta.py
 python examples/plot_propagation.py
 python examples/plot_npc_inputs.py
+python examples/explore_npc_parameter_space.py
 pytest
 ruff check .
 ```
+
+The parameter-space example screens 320 combinations of mass, launch time,
+jet power, and tail exponent. Its assumptions, results, and the current finite-
+tail boundary caveat are documented in
+[`docs/np_converter_parameter_study.md`](docs/np_converter_parameter_study.md).
 
 Plots are written under `examples/output/`, which is ignored by Git.
