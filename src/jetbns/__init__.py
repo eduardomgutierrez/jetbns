@@ -9,6 +9,7 @@ from .ejecta import (
     lorentz_factor,
 )
 from .engines import ConstantEngine, Engine, PowerLawEngine
+from .npc import NpcConfig, NpcInputs, evaluate_npc_inputs, relative_lorentz_factor
 from .propagation import JetHead, PropagationResult
 
 __all__ = [
@@ -19,8 +20,12 @@ __all__ = [
     "HomologousPowerLaw",
     "JetHead",
     "NumericalEjecta",
+    "NpcConfig",
+    "NpcInputs",
     "OutflowHistory",
     "PowerLawEngine",
     "PropagationResult",
+    "evaluate_npc_inputs",
     "lorentz_factor",
+    "relative_lorentz_factor",
 ]

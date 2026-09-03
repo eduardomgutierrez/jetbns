@@ -2,9 +2,10 @@
 
 `jetbns` is a clean, tested Python implementation of semi-analytic models for
 relativistic jets propagating through binary-neutron-star merger ejecta. It
-currently provides ejecta profiles, one-sided luminosity engines, and an
-uncollimated relativistic jet-head propagator. Cocoon collimation and radiation
-will be added only with reproducible regression tests.
+currently provides ejecta profiles, one-sided luminosity engines, an
+uncollimated relativistic jet-head propagator, and deterministic inputs for an
+external neutron--proton converter (NPC) Monte Carlo. Cocoon collimation and
+radiation will be added only with reproducible regression tests.
 
 The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
@@ -87,11 +88,37 @@ print(result.broke_out, result.breakout_time_s)
 includes the ambient ejecta velocity and retarded engine luminosity. The fixed
 integration step is explicit; convergence should be checked by halving it.
 
+## Neutron--proton converter inputs
+
+On the `project/np-converter` branch, a solved trajectory can be converted into
+the deterministic shock quantities required by a separate NPC Monte Carlo:
+
+```python
+from jetbns import NpcConfig, evaluate_npc_inputs
+
+config = NpcConfig(
+    path_length="radius",          # notes/legacy default: Delta r = r
+    target_nucleon_fraction=1.0,   # replace when a composition model is known
+)
+inputs = evaluate_npc_inputs(result, ejecta, config=config)
+inputs.to_hdf5("npc_inputs.h5", config=config, metadata={"run": "example"})
+```
+
+The table includes relative Lorentz factor, hadronuclear optical depth,
+gyration parameter, upstream density and magnetic field, downstream
+temperature, both maximum-energy limits, and observer-frame maximum energy.
+The exact breakout sample is omitted by default. Every HDF5 dataset records its
+unit, and the configuration is stored with the output. The default observer
+boost is the jet-head Lorentz factor; a scalar or array can be supplied
+explicitly. This module does not perform particle injection, collision
+sampling, conversion cycles, transport, or spectral synthesis.
+
 ## Examples and tests
 
 ```bash
 python examples/plot_ejecta.py
 python examples/plot_propagation.py
+python examples/plot_npc_inputs.py
 pytest
 ruff check .
 ```
