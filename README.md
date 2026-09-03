@@ -1,10 +1,10 @@
 # jetbns
 
 `jetbns` is a clean, tested Python implementation of semi-analytic models for
-relativistic jets propagating through binary-neutron-star merger ejecta. The
-first milestone provides ejecta profiles; engine, jet/cocoon propagation, and
-radiation will be added only after their legacy results have reproducible
-regression tests.
+relativistic jets propagating through binary-neutron-star merger ejecta. It
+currently provides ejecta profiles, one-sided luminosity engines, and an
+uncollimated relativistic jet-head propagator. Cocoon collimation and radiation
+will be added only with reproducible regression tests.
 
 The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
@@ -66,15 +66,38 @@ must not be interpreted as simulation output. For the older WhiskyTHC layout,
 use `OutflowHistory.from_legacy_hdf5(...)` and specify the angular-bin group and
 extraction radius explicitly.
 
+## Engine and jet-head propagation
+
+Engine luminosities are true one-sided jet powers. The convenience constructor
+converts a top-hat isotropic-equivalent luminosity using its opening solid angle:
+
+```python
+import numpy as np
+from jetbns import ConstantEngine, HomologousPowerLaw, JetHead
+
+ejecta = HomologousPowerLaw()
+engine = ConstantEngine.from_isotropic_equivalent(
+    5e51,
+    launch_time_s=0.1,
+    opening_angle_rad=np.deg2rad(6.8),
+)
+result = JetHead(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
+print(result.broke_out, result.breakout_time_s)
+```
+
+`JetHead` implements momentum-flux balance for a conical, uncollimated jet and
+includes the ambient ejecta velocity and retarded engine luminosity. The fixed
+integration step is explicit; convergence should be checked by halving it.
+
 ## Examples and tests
 
 ```bash
 python examples/plot_ejecta.py
+python examples/plot_propagation.py
 pytest
 ruff check .
 ```
 
-The plot is written to `examples/output/ejecta_profiles.png`, which is ignored
-by Git. See `PROJECT_CONTEXT.md` for model assumptions and `NEXT_STEPS.md` for
-the exact handoff state.
-
+Plots are written under `examples/output/`, which is ignored by Git. See
+`PROJECT_CONTEXT.md` for model assumptions and `NEXT_STEPS.md` for the exact
+handoff state.
