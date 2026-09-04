@@ -51,10 +51,16 @@ class JetHead:
     engine: Engine
     ejecta: Ejecta
     calibration: float = 0.65
+    breakout_opacity_cm2_g: float = 0.16
+    breakout_optical_depth_samples: int = 256
 
     def __post_init__(self) -> None:
         if self.calibration <= 0:
             raise ValueError("calibration must be positive")
+        if self.breakout_opacity_cm2_g <= 0:
+            raise ValueError("breakout opacity must be positive")
+        if self.breakout_optical_depth_samples < 16:
+            raise ValueError("breakout_optical_depth_samples must be at least 16")
 
     def cross_section(self, radius: float) -> float:
         """Return conical jet cross-section in cm^2."""
@@ -81,6 +87,37 @@ class JetHead:
         head_beta = ambient_beta + (self.engine.beta - ambient_beta) / (1.0 + effective**-0.5)
         return float(head_beta), ambient_beta, float(effective)
 
+    @staticmethod
+    def shock_beta_in_ambient_frame(head_beta: float, ambient_beta: float) -> float:
+        r"""Return legacy shock speed :math:`\beta'_s` in the ambient frame."""
+        relative_beta = (head_beta - ambient_beta) / (1.0 - head_beta * ambient_beta)
+        if relative_beta <= 0:
+            return 0.0
+        relative_gamma = float(lorentz_factor(relative_beta))
+        adiabatic_index = 4.0 / 3.0
+        shock_four_velocity_squared = (
+            (relative_gamma - 1.0)
+            * (adiabatic_index * relative_gamma + 1.0) ** 2
+            / (2.0 + adiabatic_index * (2.0 - adiabatic_index) * (relative_gamma - 1.0))
+        )
+        return float(np.sqrt(shock_four_velocity_squared / (1.0 + shock_four_velocity_squared)))
+
+    def breakout_residual(self, radius: float, time: float) -> float:
+        r"""Return positive before breakout and zero at the breakout surface."""
+        if radius >= self.ejecta.optical_depth_outer_radius(time):
+            return -1.0
+        head_beta, ambient_beta, _ = self.state(radius, time)
+        shock_beta = self.shock_beta_in_ambient_frame(head_beta, ambient_beta)
+        if shock_beta <= 0:
+            return np.inf
+        optical_depth = self.ejecta.optical_depth(
+            radius,
+            time,
+            opacity=self.breakout_opacity_cm2_g,
+            samples=self.breakout_optical_depth_samples,
+        )
+        return optical_depth - 1.0 / shock_beta
+
     def propagate(
         self,
         *,
@@ -90,9 +127,10 @@ class JetHead:
     ) -> PropagationResult:
         """Integrate the jet-head trajectory with fourth-order Runge--Kutta.
 
-        Integration ends at the ejecta outer boundary or ``max_time_s``. The
-        fixed step is explicit so convergence can be checked by rerunning with a
-        smaller value.
+        Integration ends when the upstream optical depth falls below
+        ``1 / beta_s'``. Smooth numerical profiles include their high-velocity
+        tail in that optical-depth integral. The fixed step is explicit so
+        convergence can be checked by rerunning with a smaller value.
         """
         start = self.engine.launch_time_s if start_time_s is None else start_time_s
         if start < self.engine.launch_time_s:
@@ -120,13 +158,22 @@ class JetHead:
             k4 = derivative(radius + step * k3, time + step)
             next_radius = radius + step * (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
             next_time = time + step
-            outer = self.ejecta.outer_radius(next_time)
-            if next_radius >= outer:
-                previous_gap = self.ejecta.outer_radius(time) - radius
-                current_gap = outer - next_radius
-                fraction = previous_gap / (previous_gap - current_gap)
+            current_breakout_residual = self.breakout_residual(next_radius, next_time)
+            if current_breakout_residual <= 0:
+                lower_fraction = 0.0
+                upper_fraction = 1.0
+                radius_increment = next_radius - radius
+                for _ in range(32):
+                    fraction = 0.5 * (lower_fraction + upper_fraction)
+                    trial_time = time + fraction * step
+                    trial_radius = radius + fraction * radius_increment
+                    if self.breakout_residual(trial_radius, trial_time) > 0:
+                        lower_fraction = fraction
+                    else:
+                        upper_fraction = fraction
+                fraction = 0.5 * (lower_fraction + upper_fraction)
                 next_time = time + fraction * step
-                next_radius = self.ejecta.outer_radius(next_time)
+                next_radius = radius + fraction * radius_increment
                 broke_out = True
             time, radius = next_time, next_radius
             times.append(time)

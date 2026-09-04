@@ -207,7 +207,10 @@ def evaluate_npc_inputs(
         path_length = radius.copy()
     else:
         path_length = np.asarray(
-            [ejecta.outer_radius(float(t)) - r for r, t in zip(radius, time, strict=True)]
+            [
+                ejecta.optical_depth_outer_radius(float(t)) - r
+                for r, t in zip(radius, time, strict=True)
+            ]
         )
         if np.any(path_length < 0):
             raise ValueError("trajectory extends beyond the ejecta outer boundary")

@@ -78,13 +78,17 @@ class Ejecta(ABC):
         ``opacity`` is in cm^2 g^-1. The default retains the legacy electron-
         scattering value used in the published calculations.
         """
-        outer = self.outer_radius(time)
+        outer = self.optical_depth_outer_radius(time)
         if radius >= outer:
             return 0.0
         if radius < self.inner_radius(time):
             raise ValueError("radius lies below the ejecta inner boundary")
         grid = np.geomspace(radius, outer, samples)
         return float(np.trapezoid(opacity * self.density(grid, time), grid))
+
+    def optical_depth_outer_radius(self, time: float) -> float:
+        """Return the upper boundary used for radial optical-depth integrals."""
+        return self.outer_radius(time)
 
 
 @dataclass(frozen=True)
@@ -339,8 +343,8 @@ class NumericalEjecta(Ejecta):
     Each recorded launch epoch contributes a generalized-Gaussian distribution
     in beta. ``cutoff_mode="sharp"`` truncates it at the fastest recorded
     shell; ``cutoff_mode="smooth"`` retains the exponential-like high-velocity
-    tail. ``outer_radius`` remains the nominal fastest-shell radius used by the
-    legacy jet-breakout calculation in both modes.
+    tail. ``outer_radius`` remains the nominal fastest-shell radius; smooth-tail
+    optical-depth integrals extend beyond it when locating shock breakout.
     The local density follows from mass conservation after free expansion. The
     history is isotropic-equivalent by default; a partial angular bin is scaled
     by ``4*pi/solid_angle_sr``.
@@ -396,6 +400,11 @@ class NumericalEjecta(Ejecta):
             time - self.history.time_s[launched]
         )
         return float(np.max(radii))
+
+    def optical_depth_outer_radius(self, time: float) -> float:
+        """Include the legacy smooth tail out to three nominal outer radii."""
+        nominal = self.outer_radius(time)
+        return nominal if self.cutoff_mode == "sharp" else 3.0 * nominal
 
     def _launch_grid(self, time: float) -> tuple[FloatArray, FloatArray, FloatArray]:
         upper = min(time * (1.0 - 1e-6), max(time, self.history.time_s[-1]))

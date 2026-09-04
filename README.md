@@ -84,6 +84,10 @@ result = JetHead(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
 print(result.broke_out, result.breakout_time_s)
 ```
 
+Breakout is located where the optical depth ahead of the shock falls to
+`1 / beta_s'`. For smooth numerical ejecta, propagation and the optical-depth
+integral include the retained high-velocity material beyond nominal `r_max`.
+
 `JetHead` implements momentum-flux balance for a conical, uncollimated jet and
 includes the ambient ejecta velocity and retarded engine luminosity. The fixed
 integration step is explicit; convergence should be checked by halving it.

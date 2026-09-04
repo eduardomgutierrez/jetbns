@@ -130,11 +130,19 @@ The cleaned numerical model now explicitly supports `cutoff_mode="sharp"` and
 It also exposes `kernel_shape`, corresponding to legacy `alpha`; shape 1 is an
 exponential and shape 2 is the paper-era Gaussian choice. A corrected run on
 the exact archived `DD2_M135135_M1_K2_SR/outflow_1_ber_out` profile evaluated 96
-trajectories (48 per cutoff mode), with 30 sharp and 29 smooth cases entering
-the adopted NPC region. This one-case count difference is not yet a robust tail
-result: as in the legacy propagation, breakout is still declared at the nominal
-fastest-shell radius, so the jet is not propagated through the retained smooth
-tail. The two density modes differ physically only beyond that nominal surface.
+trajectories (48 per cutoff mode). Jet propagation now uses the legacy physical
+breakout condition: the electron-scattering optical depth ahead of the shock is
+integrated to `r_max` for a sharp profile and `3*r_max` for a smooth profile,
+and breakout occurs at `tau = 1/beta_s'`, where `beta_s'` is obtained from the
+relative head/ambient Lorentz factor and the relativistic jump conditions.
+
+With that corrected criterion, 32 of 48 trajectories break out in each mode,
+but none reaches the adopted NPC region before breakout; the minimum retained
+pre-breakout `tau_pn` is 5.58. Sharp and smooth results are identical for this
+profile and grid because their electron-scattering breakout surfaces lie inside
+the nominal fastest-shell radius. The propagator does continue beyond `r_max`
+when a smooth tail remains optically thick there, and this behavior has a
+dedicated regression test.
 
 These are screening results, not validated predictions. The local files are
 not the exact `outflow_data/more` paths referenced by the paper-era notebooks;

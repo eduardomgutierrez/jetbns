@@ -65,6 +65,8 @@ def test_numerical_cutoff_modes_above_fastest_recorded_shell() -> None:
     assert sharp.velocity(radius, time) == 0.0
     assert smooth.density(radius, time) > 0.0
     assert smooth.velocity(radius, time) > 0.4 * SPEED_OF_LIGHT
+    assert sharp.optical_depth_outer_radius(time) == sharp.outer_radius(time)
+    assert smooth.optical_depth_outer_radius(time) == 3.0 * smooth.outer_radius(time)
 
 
 def test_numerical_kernel_shape_controls_tail_falloff() -> None:
