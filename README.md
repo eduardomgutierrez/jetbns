@@ -106,26 +106,32 @@ the deterministic shock quantities required by a separate NPC Monte Carlo:
 from jetbns import NpcConfig, evaluate_npc_inputs
 
 config = NpcConfig(
-    path_length="radius",          # notes/legacy default: Delta r = r
-    target_nucleon_fraction=1.0,   # replace when a composition model is known
+    path_length="radius",       # notes/legacy default: Delta r = r
+    electron_fraction=0.1,       # fallback when the ejecta has no Ye profile
+    free_neutron_transition_mass_msun=1e-4,
 )
 inputs = evaluate_npc_inputs(result, ejecta, config=config)
 inputs.to_hdf5("npc_inputs.h5", config=config, metadata={"run": "example"})
 ```
 
-The table includes relative Lorentz factor, hadronuclear optical depth,
-gyration parameter, upstream density and magnetic field, downstream
-temperature, both maximum-energy limits, and observer-frame maximum energy.
+The table includes relative Lorentz factor, total baryon density, approximate
+proton and surviving free-neutron densities, both directional nucleon optical
+depths, gyration parameter, upstream magnetic field, downstream temperature,
+both maximum-energy limits, and observer-frame maximum energy.
 The exact breakout sample is omitted by default. Every HDF5 dataset records its
 unit, and the configuration is stored with the output. The default observer
 boost is the jet-head Lorentz factor; a scalar or array can be supplied
 explicitly. This module does not perform particle injection, collision
 sampling, conversion cycles, transport, or spectral synthesis.
 
-`xi(1)` follows equation 7 of Kashiyama, Murase & Meszaros (2013),
+The free-neutron abundance is the schematic outer-skin prescription of Metzger
+et al. (2015), not a reaction-network result. The exported names are explicit:
+`neutron_to_proton_optical_depth` uses the proton density as its target and
+`proton_to_neutron_optical_depth` uses the free-neutron density. `xi(1)` follows
+equation 7 of Kashiyama, Murase & Meszaros (2013),
 `e B / (sigma_pn m_p c^2 n)`. This corrects an extra factor of `c` in the local
-notes and legacy implementation. Corrected HDF5 files use schema version 2;
-schema-version-1 NPC files should be regenerated.
+notes and legacy implementation. Species-resolved HDF5 files use schema version
+3; older NPC files should be regenerated.
 
 ## Examples and tests
 

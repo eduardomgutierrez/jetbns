@@ -70,6 +70,17 @@ class Ejecta(ABC):
         integrand = 4.0 * np.pi * radius**2 * self.density(radius, time)
         return float(np.trapezoid(integrand, radius))
 
+    def mass_above(self, radius: float, time: float, *, samples: int = 512) -> float:
+        """Return isotropic-equivalent mass exterior to ``radius`` in grams."""
+        outer = self.optical_depth_outer_radius(time)
+        if radius >= outer:
+            return 0.0
+        if radius < self.inner_radius(time) or samples < 2:
+            raise ValueError("radius must be inside the ejecta and samples at least two")
+        grid = np.geomspace(radius, outer, samples)
+        integrand = 4.0 * np.pi * grid**2 * self.density(grid, time)
+        return float(np.trapezoid(integrand, grid))
+
     def optical_depth(
         self, radius: float, time: float, *, opacity: float = 0.16, samples: int = 2048
     ) -> float:

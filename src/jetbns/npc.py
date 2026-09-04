@@ -22,6 +22,7 @@ from .constants import (
     ELEMENTARY_CHARGE,
     PROTON_MASS,
     RADIATION_CONSTANT,
+    SOLAR_MASS,
     SPEED_OF_LIGHT,
 )
 from .ejecta import Ejecta, lorentz_factor
@@ -43,9 +44,10 @@ class NpcConfig:
     """Physical choices used to derive NPC inputs.
 
     ``path_length="radius"`` and ``target_nucleon_fraction=1`` reproduce the
-    current notes and legacy implementation.  The alternative path is the
-    radial distance to the ejecta outer boundary.  Composition can be supplied
-    as a number fraction without embedding a particular electron-fraction model.
+    total-baryon reference in the notes and legacy implementation. The
+    species-resolved estimate instead uses ejecta ``Y_e`` when available (or
+    ``electron_fraction`` otherwise) and the Metzger et al. neutron-skin model.
+    The alternative path is the radial distance to the ejecta outer boundary.
     """
 
     magnetic_field_at_reference_g: float = DEFAULT_MAGNETIC_FIELD_G
@@ -55,6 +57,9 @@ class NpcConfig:
     target_nucleon_fraction: float = 1.0
     path_length: PathLength = "radius"
     bethe_heitler_wien_factor: float = BETHE_HEITLER_WIEN_FACTOR
+    electron_fraction: float = 0.1
+    free_neutron_transition_mass_msun: float = 1.0e-4
+    free_neutron_decay_time_s: float = 900.0
 
     def __post_init__(self) -> None:
         positive = (
@@ -71,6 +76,10 @@ class NpcConfig:
             raise ValueError("target_nucleon_fraction must lie in (0, 1]")
         if self.path_length not in ("radius", "remaining_ejecta"):
             raise ValueError("path_length must be 'radius' or 'remaining_ejecta'")
+        if not 0 <= self.electron_fraction <= 0.5:
+            raise ValueError("electron_fraction must lie in [0, 0.5]")
+        if self.free_neutron_transition_mass_msun <= 0 or self.free_neutron_decay_time_s <= 0:
+            raise ValueError("free-neutron mass and decay time must be positive")
 
 
 NPC_UNITS = {
@@ -83,9 +92,13 @@ NPC_UNITS = {
     "relative_lorentz_factor": "1",
     "upstream_density_g_cm3": "g cm^-3",
     "upstream_number_density_cm3": "cm^-3",
+    "proton_number_density_cm3": "cm^-3",
+    "free_neutron_number_density_cm3": "cm^-3",
     "upstream_magnetic_field_g": "G",
     "path_length_cm": "cm",
     "pn_optical_depth": "1",
+    "neutron_to_proton_optical_depth": "1",
+    "proton_to_neutron_optical_depth": "1",
     "gyration_parameter": "1",
     "downstream_temperature_k": "K",
     "downstream_temperature_kev": "keV",
@@ -110,9 +123,13 @@ class NpcInputs:
     relative_lorentz_factor: FloatArray
     upstream_density_g_cm3: FloatArray
     upstream_number_density_cm3: FloatArray
+    proton_number_density_cm3: FloatArray
+    free_neutron_number_density_cm3: FloatArray
     upstream_magnetic_field_g: FloatArray
     path_length_cm: FloatArray
     pn_optical_depth: FloatArray
+    neutron_to_proton_optical_depth: FloatArray
+    proton_to_neutron_optical_depth: FloatArray
     gyration_parameter: FloatArray
     downstream_temperature_k: FloatArray
     downstream_temperature_kev: FloatArray
@@ -132,9 +149,10 @@ class NpcInputs:
         """Write a portable HDF5 table with per-dataset units and assumptions."""
         with h5py.File(path, "w") as handle:
             handle.attrs["description"] = "Deterministic inputs for an external NPC Monte Carlo"
-            handle.attrs["schema"] = "jetbns.npc-inputs.v2"
+            handle.attrs["schema"] = "jetbns.npc-inputs.v3"
             handle.attrs["source_equations"] = (
                 "Kashiyama, Murase & Meszaros (2013), equation 7; "
+                "Metzger et al. (2015), free-neutron skin prescription; "
                 "local NPC notes, equations 31, 33, 38-43"
             )
             for field in fields(self):
@@ -154,6 +172,26 @@ def relative_lorentz_factor(head_beta: ArrayLike, ambient_beta: ArrayLike) -> Fl
     head = np.asarray(head_beta, dtype=float)
     ambient = np.asarray(ambient_beta, dtype=float)
     return np.asarray(lorentz_factor(head) * lorentz_factor(ambient) * (1.0 - head * ambient))
+
+
+def metzger_free_neutron_fraction(
+    electron_fraction: ArrayLike,
+    exterior_mass_msun: ArrayLike,
+    time_s: ArrayLike,
+    *,
+    transition_mass_msun: float = 1.0e-4,
+    decay_time_s: float = 900.0,
+) -> FloatArray:
+    r"""Estimate the surviving free-neutron mass fraction in the outer skin.
+
+    This implements the schematic Metzger et al. (2015) mass-coordinate
+    prescription, including beta decay. It is not a reaction-network result.
+    """
+    ye = np.asarray(electron_fraction, dtype=float)
+    mass = np.asarray(exterior_mass_msun, dtype=float)
+    time = np.asarray(time_s, dtype=float)
+    skin = (2.0 / np.pi) * np.arctan(transition_mass_msun / np.maximum(mass, np.finfo(float).tiny))
+    return np.maximum(0.0, 1.0 - 2.0 * ye) * skin * np.exp(-time / decay_time_s)
 
 
 def evaluate_npc_inputs(
@@ -200,6 +238,15 @@ def evaluate_npc_inputs(
     ambient_gamma = np.asarray(lorentz_factor(ambient_beta))
     relative_gamma = relative_lorentz_factor(head_beta, ambient_beta)
     number_density = density * config.target_nucleon_fraction / PROTON_MASS
+    try:
+        electron_fraction = np.asarray(
+            [
+                ejecta.electron_fraction(float(r), float(t))
+                for r, t in zip(radius, time, strict=True)
+            ]
+        )
+    except (AttributeError, ValueError):
+        electron_fraction = np.full_like(radius, config.electron_fraction)
     magnetic_field = (
         config.magnetic_field_at_reference_g * (config.magnetic_reference_radius_cm / radius) ** 2
     )
@@ -216,6 +263,27 @@ def evaluate_npc_inputs(
             raise ValueError("trajectory extends beyond the ejecta outer boundary")
 
     optical_depth = number_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
+    exterior_mass = np.asarray(
+        [
+            ejecta.mass_above(float(r), float(t), samples=128) / SOLAR_MASS
+            for r, t in zip(radius, time, strict=True)
+        ]
+    )
+    free_neutron_fraction = metzger_free_neutron_fraction(
+        electron_fraction,
+        exterior_mass,
+        time,
+        transition_mass_msun=config.free_neutron_transition_mass_msun,
+        decay_time_s=config.free_neutron_decay_time_s,
+    )
+    proton_density = electron_fraction * density / PROTON_MASS
+    neutron_density = free_neutron_fraction * density / PROTON_MASS
+    neutron_to_proton_depth = (
+        proton_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
+    )
+    proton_to_neutron_depth = (
+        neutron_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
+    )
     gyration = (
         ELEMENTARY_CHARGE
         * magnetic_field
@@ -257,9 +325,13 @@ def evaluate_npc_inputs(
         relative_gamma,
         density,
         number_density,
+        proton_density,
+        neutron_density,
         magnetic_field,
         path_length,
         optical_depth,
+        neutron_to_proton_depth,
+        proton_to_neutron_depth,
         gyration,
         temperature,
         temperature_kev,

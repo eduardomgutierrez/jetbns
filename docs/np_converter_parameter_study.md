@@ -167,3 +167,24 @@ python examples/plot_numerical_parameter_gallery.py path/to/lagrangian_profile.h
 Each figure shows ejecta density, velocity, and radial optical depth at three
 times; jet-head propagation relative to the nominal and tail boundaries;
 head/ambient velocities; and the evolving NPC diagnostics.
+
+## Free-neutron skin approximation
+
+The NPC export uses the schematic outer-neutron-layer prescription of Metzger
+et al. (2015). At exterior mass coordinate `m_above`,
+
+```text
+X_n,free = max(0, 1 - 2 Ye) * (2/pi) * atan(m_n/m_above) * exp(-t/tau_n),
+```
+
+with defaults `m_n = 1e-4 Msun` and `tau_n = 900 s`. This is consistent with
+the paper's intended limits: the outermost low-mass skin retains the neutron
+excess, while neutrons deeper than the transition mass are captured into
+nuclei. It is a phenomenological estimate, not a nuclear-network abundance.
+
+The HDF5 NPC schema v3 exports total baryon density, approximate proton density
+`n_p = Ye rho/m_p`, free-neutron density `n_n = X_n,free rho/m_p`, and two
+directional collision depths: `neutron_to_proton_optical_depth` uses `n_p`,
+while `proton_to_neutron_optical_depth` uses `n_n`. The original
+`pn_optical_depth` remains as a labelled total-baryon reference for backward
+compatibility.

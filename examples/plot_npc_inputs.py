@@ -31,15 +31,27 @@ def main() -> None:
     figure, axes = plt.subplots(3, 3, figsize=(13, 10), constrained_layout=True)
     axes[0, 0].plot(inputs.time_s, inputs.relative_lorentz_factor)
     axes[0, 0].set(ylabel=r"relative Lorentz factor $\Gamma_{\rm rel}$")
-    axes[0, 1].plot(inputs.time_s, inputs.pn_optical_depth)
+    axes[0, 1].plot(inputs.time_s, inputs.pn_optical_depth, label="total baryon")
+    axes[0, 1].plot(
+        inputs.time_s, inputs.neutron_to_proton_optical_depth, label=r"$n\to p$ targets"
+    )
+    axes[0, 1].plot(
+        inputs.time_s, inputs.proton_to_neutron_optical_depth, label=r"$p\to n$ targets"
+    )
     axes[0, 1].set_yscale("log")
     axes[0, 1].set(ylabel=r"optical depth $\tau_{pn}$")
+    axes[0, 1].legend(fontsize=8)
     axes[0, 2].plot(inputs.time_s, inputs.gyration_parameter)
     axes[0, 2].set_yscale("log")
     axes[0, 2].set(ylabel=r"gyration parameter $\xi(1)$")
-    axes[1, 0].plot(inputs.time_s, inputs.upstream_number_density_cm3)
+    axes[1, 0].plot(inputs.time_s, inputs.upstream_number_density_cm3, label=r"$n_b$")
+    axes[1, 0].plot(inputs.time_s, inputs.proton_number_density_cm3, label=r"$n_p$")
+    axes[1, 0].plot(
+        inputs.time_s, inputs.free_neutron_number_density_cm3, label=r"$n_n^{free}$"
+    )
     axes[1, 0].set_yscale("log")
     axes[1, 0].set(ylabel=r"number density [cm$^{-3}$]")
+    axes[1, 0].legend(fontsize=8)
     axes[1, 1].plot(inputs.time_s, inputs.upstream_magnetic_field_g)
     axes[1, 1].set_yscale("log")
     axes[1, 1].set(ylabel="magnetic field [G]")

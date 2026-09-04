@@ -8,6 +8,7 @@ from jetbns import (
     JetHead,
     NpcConfig,
     evaluate_npc_inputs,
+    metzger_free_neutron_fraction,
     relative_lorentz_factor,
 )
 from jetbns.constants import (
@@ -122,8 +123,10 @@ def test_hdf5_export_records_units_configuration_and_metadata(tmp_path) -> None:
     data.to_hdf5(output, config=config, metadata={"model": "test trajectory"})
 
     with h5py.File(output) as handle:
-        assert handle.attrs["schema"] == "jetbns.npc-inputs.v2"
+        assert handle.attrs["schema"] == "jetbns.npc-inputs.v3"
         assert handle["pn_optical_depth"].attrs["unit"] == "1"
+        assert handle["proton_number_density_cm3"].attrs["unit"] == "cm^-3"
+        assert handle["free_neutron_number_density_cm3"].attrs["unit"] == "cm^-3"
         assert handle["upstream_density_g_cm3"].attrs["unit"] == "g cm^-3"
         assert handle["configuration"].attrs["path_length"] == "remaining_ejecta"
         assert handle["metadata"].attrs["model"] == "test trajectory"
@@ -154,3 +157,26 @@ def test_gyration_parameter_uses_published_c_squared_expression() -> None:
         / (PROTON_MASS * SPEED_OF_LIGHT**2 * data.upstream_number_density_cm3 * PN_CROSS_SECTION)
     )
     assert data.gyration_parameter == pytest.approx(expected)
+
+
+def test_metzger_neutron_skin_limits_and_beta_decay() -> None:
+    fraction = metzger_free_neutron_fraction(
+        np.array([0.1, 0.1, 0.1]),
+        np.array([0.0, 1.0e-4, 1.0]),
+        np.array([0.0, 0.0, 900.0]),
+    )
+    assert fraction[0] == pytest.approx(0.8)
+    assert fraction[1] == pytest.approx(0.4)
+    assert fraction[2] < 1.0e-4
+
+
+def test_species_densities_and_directional_optical_depths_are_exported() -> None:
+    ejecta, result = make_solution()
+    data = evaluate_npc_inputs(result, ejecta, config=NpcConfig(electron_fraction=0.1))
+
+    assert data.proton_number_density_cm3 == pytest.approx(
+        0.1 * data.upstream_density_g_cm3 / PROTON_MASS
+    )
+    assert np.all(data.free_neutron_number_density_cm3 >= 0)
+    assert data.neutron_to_proton_optical_depth == pytest.approx(0.1 * data.pn_optical_depth)
+    assert np.all(data.proton_to_neutron_optical_depth >= 0)
