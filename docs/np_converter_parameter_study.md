@@ -156,3 +156,14 @@ Run the numerical screening by passing one or more source files:
 ```bash
 python examples/explore_npc_numerical.py path/to/lagrangian_profile.h5
 ```
+
+Generate ten representative multipanel diagnostics spanning launch time, jet
+power, velocity-kernel width, and sharp/smooth cutoff mode with:
+
+```bash
+python examples/plot_numerical_parameter_gallery.py path/to/lagrangian_profile.h5
+```
+
+Each figure shows ejecta density, velocity, and radial optical depth at three
+times; jet-head propagation relative to the nominal and tail boundaries;
+head/ambient velocities; and the evolving NPC diagnostics.

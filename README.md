@@ -144,9 +144,12 @@ from the file's `theta` grid:
 
 ```bash
 python examples/explore_npc_numerical.py path/to/lagrangian_profile.h5
+python examples/plot_numerical_parameter_gallery.py path/to/lagrangian_profile.h5
 ```
 
 This writes `npc_numerical_sweep.png` and `npc_numerical_sweep.h5` under
 `examples/output/`. Numerical data are not bundled with the repository.
+The gallery command writes ten representative six-panel diagnostics under
+`examples/output/numerical_gallery/`.
 
 Plots are written under `examples/output/`, which is ignored by Git.
