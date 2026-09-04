@@ -11,6 +11,11 @@ The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
 111, 063031 (2025).
 
+A typeset note distinguishing total baryon, proton, and neutron target densities
+for the NPC optical depth is available in
+[`docs/npc_target_density_note.pdf`](docs/npc_target_density_note.pdf). Rebuild
+it with `python examples/create_npc_density_note.py`.
+
 ## Installation
 
 Create a virtual environment and install the package with its development tools:
