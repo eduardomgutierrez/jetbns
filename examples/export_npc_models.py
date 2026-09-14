@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import zipfile
 from dataclasses import dataclass, fields
 from pathlib import Path
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.backends.backend_pdf import PdfPages
 from plot_numerical_parameter_gallery import solid_angle
 
 from jetbns import (
@@ -229,96 +231,105 @@ def plot_overview(rows: list[tuple], destination: Path):
     return figure
 
 
-def write_report(rows: list[tuple], overview, destination: Path) -> None:
-    """Write a short typeset handoff note without an external LaTeX dependency."""
-    with PdfPages(destination) as pdf:
-        figure = plt.figure(figsize=(8.27, 11.69))
-        figure.text(0.08, 0.94, "Representative jetBNS NPC inputs", fontsize=20, weight="bold")
-        figure.text(
-            0.08,
-            0.88,
-            "Five numerical and five analytical ejecta models, sampled at the last\n"
-            "trajectory point before optical-depth shock breakout.",
-            fontsize=12,
-        )
-        formulae = (
-            r"$n_p=Y_e\rho/m_p$" "\n"
-            r"$X_{n,free}=\max(0,1-2Y_e)\,(2/\pi)\tan^{-1}(m_n/m_{above})"
-            r"\,e^{-t/\tau_n}$" "\n"
-            r"$n_n=X_{n,free}\rho/m_p$" "\n"
-            r"$\tau_{n\to p}=n_p\sigma_{pn}\Delta r/\Gamma_a$,  "
-            r"$\tau_{p\to n}=n_n\sigma_{pn}\Delta r/\Gamma_a$"
-        )
-        figure.text(0.08, 0.70, formulae, fontsize=14, linespacing=1.8)
-        figure.text(
-            0.08,
-            0.46,
-            "Defaults and interpretation\n"
-            r"$m_n=10^{-4}M_\odot$, $\tau_n=900$ s, $\Delta r=r$, "
-            r"$\sigma_{pn}=3\times10^{-26}$ cm$^2$." "\n\n"
-            "Numerical profiles use their local Ye; analytical profiles use Ye=0.1.\n"
-            "The Metzger neutron skin and np=Ye rho/mp are phenomenological free-nucleon\n"
-            "estimates. Bound nuclei and a reaction network are not modeled. The code\n"
-            "only supplies deterministic inputs; it does not run the particle Monte Carlo.",
-            fontsize=11,
-            linespacing=1.5,
-        )
-        figure.text(
-            0.08,
-            0.31,
-            "Result for this sample\n"
-            "Four numerical models have Ye >= 0.5 at the last pre-breakout point, so the\n"
-            "adopted neutron-excess prescription gives n_n=0 there. Numerical SFHo has\n"
-            r"nonzero free neutrons and $\tau_{p\to n}\simeq1.06$. The analytical cases "
-            r"have $\tau_{n\to p}\simeq0.63$--$1.50$ but "
-            r"$\tau_{p\to n}\simeq5.0$--$11.8$.",
-            fontsize=10.5,
-            linespacing=1.45,
-        )
-        figure.text(
-            0.08,
-            0.19,
-            "Files\n"
-            "npc_prebreakout_models.h5: summary plus full per-model NPC trajectories\n"
-            "npc_prebreakout_overview.png: cross-model comparison\n"
-            "plots/*.png: ejecta and propagation diagnostics for every model",
-            fontsize=11,
-            linespacing=1.5,
-        )
-        pdf.savefig(figure)
-        plt.close(figure)
-        pdf.savefig(overview)
+def _latex_escape(value: str) -> str:
+    return value.replace("_", r"\_")
 
-        figure, axis = plt.subplots(figsize=(11.69, 8.27))
-        axis.axis("off")
-        columns = (
-            "model", "type", "t_bo [s]", "Gamma_rel", "n_p", "n_n free",
-            "tau n->p", "tau p->n",
-        )
-        cells = []
-        for row in rows:
-            cells.append(
-                (
-                    row[0], row[1], f"{row[8]:.3g}", f"{row[14]:.3g}",
-                    f"{row[15]:.2e}", f"{row[16]:.2e}", f"{row[17]:.3g}",
-                    f"{row[18]:.3g}",
-                )
-            )
-        table = axis.table(cellText=cells, colLabels=columns, loc="center", cellLoc="center")
-        table.auto_set_font_size(False)
-        table.set_fontsize(8.5)
-        table.scale(1, 1.65)
-        axis.set_title("Values immediately before breakout", fontsize=17, pad=18)
-        axis.text(
-            0.5,
-            0.08,
-            r"Number densities are in cm$^{-3}$. Full precision and trajectories "
-            "are in the HDF5 file.",
-            ha="center",
-            fontsize=10,
-        )
-        pdf.savefig(figure)
-        plt.close(figure)
+
+def write_latex_report(rows: list[tuple], output: Path) -> Path:
+    """Write and compile the concise data-interface note with LaTeX."""
+    table_rows = "\n".join(
+        f"{_latex_escape(row[0])} & {_latex_escape(row[1])} & {row[8]:.3g} & "
+        f"{row[14]:.3g} & {row[15]:.2e} & {row[16]:.2e} & "
+        f"{row[17]:.3g} & {row[18]:.3g} \\\\" for row in rows
+    )
+    source = rf"""\documentclass[10pt]{{article}}
+\usepackage[a4paper,margin=1.6cm]{{geometry}}
+\usepackage{{amsmath,graphicx,array}}
+\setlength{{\parindent}}{{0pt}}
+\begin{{document}}
+\begin{{center}}\Large\bfseries Representative jetBNS NPC inputs\end{{center}}
+
+\textbf{{Files to transfer.}} Transfer exactly
+\texttt{{npc\_prebreakout\_models.h5}} and this PDF. The HDF5 file is the
+machine-readable input. This document defines its content. The PNG files and
+Python scripts are optional diagnostics and reproducibility material.
+
+\section*{{Physical definitions}}
+The species-resolved estimates are
+\begin{{align}}
+n_p &= Y_e\rho/m_p,\\
+X_{{n,\mathrm{{free}}}} &= \max(0,1-2Y_e)\frac{{2}}{{\pi}}
+\tan^{{-1}}\!\left(\frac{{m_n}}{{m_{{\rm above}}}}\right)e^{{-t/\tau_n}},\\
+n_n &= X_{{n,\mathrm{{free}}}}\rho/m_p,\\
+\tau_{{n\rightarrow p}} &= n_p\sigma_{{pn}}\Delta r/\Gamma_a,\qquad
+\tau_{{p\rightarrow n}} = n_n\sigma_{{pn}}\Delta r/\Gamma_a.
+\end{{align}}
+Defaults are $m_n=10^{{-4}}M_\odot$, $\tau_n=900$ s,
+$\Delta r=r$, and $\sigma_{{pn}}=3\times10^{{-26}}$ cm$^2$.
+Numerical profiles use local $Y_e$; analytical profiles use $Y_e=0.1$.
+These are phenomenological free-nucleon estimates. Bound nuclei and nuclear
+reaction-network evolution are not included.
+
+\section*{{How to read the HDF5 file}}
+Use \texttt{{/models/<model>/}} for the time series supplied to the Monte
+Carlo. The arrays have equal length and each dataset has a \texttt{{unit}}
+attribute. The primary arrays are
+\texttt{{time\_s}}, \texttt{{radius\_cm}},
+\texttt{{relative\_lorentz\_factor}},
+\texttt{{proton\_number\_density\_cm3}},
+\texttt{{free\_neutron\_number\_density\_cm3}},
+\texttt{{neutron\_to\_proton\_optical\_depth}}, and
+\texttt{{proton\_to\_neutron\_optical\_depth}}.
+The last array element is the last integration point before breakout.
+The group \texttt{{/prebreakout\_summary/}} contains one scalar row per model
+for rapid model selection; it is not a replacement for the trajectories.
+
+\begin{{verbatim}}
+import h5py
+with h5py.File("npc_prebreakout_models.h5") as f:
+    model = f["models/num_sfho"]
+    time = model["time_s"][:]
+    gamma_rel = model["relative_lorentz_factor"][:]
+    n_p = model["proton_number_density_cm3"][:]
+    n_n = model["free_neutron_number_density_cm3"][:]
+    tau_np = model["neutron_to_proton_optical_depth"][:]
+    tau_pn = model["proton_to_neutron_optical_depth"][:]
+\end{{verbatim}}
+
+\section*{{Pre-breakout values}}
+\scriptsize
+\begin{{center}}
+\begin{{tabular}}{{l l r r r r r r}}
+Model & Type & $t_{{bo}}$ [s] & $\Gamma_{{rel}}$ & $n_p$ & $n_n$ &
+$\tau_{{n\to p}}$ & $\tau_{{p\to n}}$\\ \hline
+{table_rows}
+\end{{tabular}}
+\end{{center}}
+\normalsize
+Number densities are in cm$^{{-3}}$. Four numerical profiles have
+$Y_e\geq0.5$ at the sampled location and hence $n_n=0$ in this prescription.
+SFHo has $\tau_{{p\to n}}\simeq1.06$. The analytical cases have
+$\tau_{{n\to p}}\simeq0.63$--$1.50$ and
+$\tau_{{p\to n}}\simeq5.01$--$11.83$.
+
+\newpage
+\begin{{center}}
+\includegraphics[width=0.96\textwidth]{{npc_prebreakout_overview.png}}
+\end{{center}}
+\end{{document}}
+"""
+    tex_path = output / "npc_model_notes.tex"
+    tex_path.write_text(source)
+    executable = shutil.which("pdflatex")
+    if executable is None:
+        raise RuntimeError("pdflatex is required to build npc_model_notes.pdf")
+    subprocess.run(
+        [executable, "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
+        cwd=output,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    return output / "npc_model_notes.pdf"
 
 
 def write_hdf5(rows: list[tuple], trajectories: list[tuple], destination: Path) -> None:
@@ -423,10 +434,15 @@ def main() -> None:
     hdf5_path = output / "npc_prebreakout_models.h5"
     write_hdf5(rows, trajectories, hdf5_path)
     overview = plot_overview(rows, output / "npc_prebreakout_overview.png")
-    write_report(rows, overview, output / "npc_model_notes.pdf")
+    report = write_latex_report(rows, output)
+    archive = output / "npc_monte_carlo_inputs.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.write(hdf5_path, arcname=hdf5_path.name)
+        bundle.write(report, arcname=report.name)
     plt.close(overview)
     print(f"wrote {hdf5_path}")
-    print(f"wrote {output / 'npc_model_notes.pdf'}")
+    print(f"wrote {report}")
+    print(f"wrote {archive}")
 
 
 if __name__ == "__main__":

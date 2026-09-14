@@ -166,8 +166,10 @@ The gallery command writes ten representative six-panel diagnostics under
 
 Plots are written under `examples/output/`, which is ignored by Git.
 
-`export_npc_models.py` runs five local numerical profiles and five
-analytical exponential-tail models. It writes a schema-versioned HDF5 summary
-with full NPC trajectories, a cross-model overview, individual diagnostics,
-and a three-page PDF note under `examples/output/npc_model_export/`. The
-numerical source files are local and are not redistributed by the repository.
+`export_npc_models.py` runs five local numerical profiles and five analytical
+exponential-tail models. It writes a schema-versioned HDF5 file with complete
+NPC trajectories and a LaTeX-generated PDF interface note under
+`examples/output/npc_model_export/`. Transfer only
+`npc_monte_carlo_inputs.zip`, which contains those two required files. The PNGs,
+LaTeX source, and scripts are optional diagnostics or reproducibility material.
+The numerical source profiles are local and are not redistributed.
