@@ -140,6 +140,7 @@ python examples/plot_ejecta.py
 python examples/plot_propagation.py
 python examples/plot_npc_inputs.py
 python examples/explore_npc_parameter_space.py
+python examples/export_npc_models.py
 pytest
 ruff check .
 ```
@@ -164,3 +165,9 @@ The gallery command writes ten representative six-panel diagnostics under
 `examples/output/numerical_gallery/`.
 
 Plots are written under `examples/output/`, which is ignored by Git.
+
+`export_npc_models.py` runs five local numerical profiles and five
+analytical exponential-tail models. It writes a schema-versioned HDF5 summary
+with full NPC trajectories, a cross-model overview, individual diagnostics,
+and a three-page PDF note under `examples/output/npc_model_export/`. The
+numerical source files are local and are not redistributed by the repository.
