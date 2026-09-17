@@ -11,10 +11,44 @@ The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
 111, 063031 (2025).
 
-A typeset note distinguishing total baryon, proton, and neutron target densities
-for the NPC optical depth is available in
-[`docs/npc_target_density_note.pdf`](docs/npc_target_density_note.pdf). Rebuild
-it with `python examples/create_npc_density_note.py`.
+Start with the audited transfer workflow below. The [scientific audit](docs/scientific_audit.md)
+records the corrected reconstruction and the remaining model assumptions.
+Numerical exports made before this audit must be regenerated.
+
+## NPC transfer workflow
+
+After installation, run the self-contained analytical reference suite:
+
+```bash
+python examples/export_npc_models.py
+```
+
+This generates **one file to transfer**:
+`examples/output/npc_model_export/npc_monte_carlo_inputs.zip`.
+It contains the HDF5 input table and a LaTeX PDF with equations and definitions.
+PDF generation requires `pdflatex`
+(`texlive-latex-base` on Debian/Ubuntu). Every model is run at two or more
+resolutions before a new archive can be produced.
+
+The repository also provides an optional reader/validator; after copying it
+alongside the HDF5 file, the receiving system needs only NumPy and h5py:
+
+```bash
+python -m pip install numpy h5py
+python read_npc_inputs.py
+python read_npc_inputs.py --model ana_reference
+```
+
+Three measured numerical profiles can be included when their local files are available:
+
+```bash
+python examples/export_npc_models.py --include-numerical --data-root /path/to/codes
+```
+
+The model list and input paths are explicit in `examples/export_npc_models.py`.
+The numerical files are not bundled. Plots and build files beside the archive
+are optional diagnostics. The reference suite uses a mass-conserving
+`HomologousTail`; the earlier `BrokenPowerLaw` retains legacy behavior.
 
 ## Installation
 
@@ -26,7 +60,7 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-The base package requires NumPy and h5py. Matplotlib is needed for examples.
+The base package requires NumPy 2+ and h5py. Matplotlib is needed for examples.
 
 ## Ejecta models
 
@@ -130,8 +164,11 @@ et al. (2015), not a reaction-network result. The exported names are explicit:
 `proton_to_neutron_optical_depth` uses the free-neutron density. `xi(1)` follows
 equation 7 of Kashiyama, Murase & Meszaros (2013),
 `e B / (sigma_pn m_p c^2 n)`. This corrects an extra factor of `c` in the local
-notes and legacy implementation. Species-resolved HDF5 files use schema version
-3; older NPC files should be regenerated.
+notes and legacy implementation. Individual NPC tables use schema version 4;
+the multi-model transfer uses `jetbns.npc-model-export.v2`. It also records
+effective upstream lengths, collision rates, shock speeds in both fluid frames,
+and the cold hydrodynamic compression ratio. Proton densities remain an
+explicit free-proton proxy; bound nuclei require a separate treatment.
 
 ## Examples and tests
 
@@ -145,9 +182,8 @@ pytest
 ruff check .
 ```
 
-The parameter-space example screens 320 combinations of mass, launch time,
-jet power, and tail exponent. Its assumptions, results, and the current finite-
-tail boundary caveat are documented in
+The older parameter-space example screens 320 combinations using a legacy
+profile and baryon-reference optical depth. Its historical results are documented in
 [`docs/np_converter_parameter_study.md`](docs/np_converter_parameter_study.md).
 
 Numerical ejecta profiles can be screened with the same NPC criteria by passing
@@ -166,10 +202,4 @@ The gallery command writes ten representative six-panel diagnostics under
 
 Plots are written under `examples/output/`, which is ignored by Git.
 
-`export_npc_models.py` runs five local numerical profiles and five analytical
-exponential-tail models. It writes a schema-versioned HDF5 file with complete
-NPC trajectories and a LaTeX-generated PDF interface note under
-`examples/output/npc_model_export/`. Transfer only
-`npc_monte_carlo_inputs.zip`, which contains those two required files. The PNGs,
-LaTeX source, and scripts are optional diagnostics or reproducibility material.
-The numerical source profiles are local and are not redistributed.
+Use the transfer workflow at the top of this README for new NPC calculations.

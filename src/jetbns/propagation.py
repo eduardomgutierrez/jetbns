@@ -70,8 +70,12 @@ class JetHead:
 
     def state(self, radius: float, time: float) -> tuple[float, float, float]:
         """Return ``(head_beta, ambient_beta, effective_tilde_l)``."""
-        density = float(self.ejecta.density(radius, time))
-        ambient_beta = float(self.ejecta.velocity(radius, time)) / SPEED_OF_LIGHT
+        if hasattr(self.ejecta, "density_and_velocity"):
+            density, velocity = self.ejecta.density_and_velocity(radius, time)
+            ambient_beta = velocity / SPEED_OF_LIGHT
+        else:
+            density = float(self.ejecta.density(radius, time))
+            ambient_beta = float(self.ejecta.velocity(radius, time)) / SPEED_OF_LIGHT
         luminosity = float(self.engine.luminosity(radius, time))
         if density <= 0 or luminosity <= 0:
             return ambient_beta, ambient_beta, 0.0

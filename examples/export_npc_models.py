@@ -1,448 +1,395 @@
-"""Export representative breakout models as portable NPC inputs."""
-
+"""Export resolution-tested NPC models: analytical by default, numerical opt-in."""
 from __future__ import annotations
 
+import argparse
+import hashlib
 import shutil
 import subprocess
+import sys
+import tempfile
 import zipfile
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from plot_numerical_parameter_gallery import solid_angle
 
 from jetbns import (
-    BrokenPowerLaw,
     ConstantEngine,
+    HomologousTail,
     JetHead,
     NpcConfig,
     NumericalEjecta,
+    PropagationResult,
     evaluate_npc_inputs,
+    metzger_free_neutron_fraction,
 )
-from jetbns.constants import SPEED_OF_LIGHT
+from jetbns.constants import PROTON_MASS, SOLAR_MASS, SPEED_OF_LIGHT
 from jetbns.npc import NPC_UNITS
 
-ROOT = Path("/home/emgutierrez/codes")
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = ROOT / "examples/output/npc_model_export"
+SCHEMA = "jetbns.npc-model-export.v2"
+SUMMARY_FIELDS = (
+    "time_s", "radius_cm", "relative_lorentz_factor", "electron_fraction",
+    "proton_number_density_cm3", "free_neutron_number_density_cm3",
+    "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth",
+    "gyration_parameter", "downstream_temperature_kev",
+)
+CHECK_FIELDS = (
+    "upstream_density_g_cm3", "electron_fraction", "relative_lorentz_factor",
+    "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth",
+)
 
 
 @dataclass(frozen=True)
 class Model:
     name: str
-    kind: str
-    launch_s: float
-    luminosity_iso: float
+    kind: str = "analytical"
+    launch_s: float = 1.0
+    luminosity_iso_erg_s: float = 1e51
+    mass_msun: float = 1e-4
+    electron_fraction: float = .3
+    tail_exponent: float = 8.0
     profile: str = ""
-    width: float = np.nan
-    mass_msun: float = np.nan
-    tail_exponent: float = np.nan
 
 
-MODELS = (
-    Model(
-        "num_dd2_equal",
-        "numerical",
-        3,
-        1e51,
-        str(
-            ROOT
-            / "outflow_files_jet_propagation/Archive/wdir/dd2_analysis"
-            / "DD2_M135135_M1_K2_SR/outflow_1_ber_out/lagrangian_profile.h5"
-        ),
-        0.05,
-    ),
-    Model(
-        "num_dd2_asymmetric",
-        "numerical",
-        1,
-        1e51,
-        str(
-            ROOT
-            / "jet_propagation/jet_propagation/profile_files/new"
-            / "DD2_M180_108_45km_M1_LK_SR/outflow_1_ber_out_r/lagrangian_profile.h5"
-        ),
-        0.05,
-    ),
-    Model(
-        "num_blh",
-        "numerical",
-        3,
-        1e52,
-        str(
-            ROOT
-            / "jet_propagation/jet_propagation/profile_files/new"
-            / "BLh_M11461635_M1_K2_SR/outflow_1_ber_out/lagrangian_profile.h5"
-        ),
-        0.05,
-    ),
-    Model(
-        "num_sfho",
-        "numerical",
-        3,
-        1e51,
-        str(
-            ROOT
-            / "jet_propagation/jet_propagation/profile_files/new"
-            / "SFHo_M135-135_M1_SR/outflow_1_ber_hmin_out/lagrangian_profile.h5"
-        ),
-        0.05,
-    ),
-    Model(
-        "num_sly",
-        "numerical",
-        1,
-        1e50,
-        str(
-            ROOT
-            / "jet_propagation/jet_propagation/profile_files/new"
-            / "SLy_M145-125_M1_SR_v2/outflow_1_ber_hmin_out/lagrangian_profile.h5"
-        ),
-        0.05,
-    ),
-    Model("ana_low_mass_l50", "analytical", 3, 1e50, mass_msun=1e-5, tail_exponent=16),
-    Model("ana_low_mass_l51", "analytical", 3, 1e51, mass_msun=1e-5, tail_exponent=16),
-    Model("ana_low_mass_l52", "analytical", 3, 1e52, mass_msun=1e-5, tail_exponent=16),
-    Model("ana_broader_tail", "analytical", 3, 1e50, mass_msun=1e-5, tail_exponent=8),
-    Model("ana_higher_mass", "analytical", 3, 1e51, mass_msun=1e-4, tail_exponent=16),
+ANALYTICAL = (
+    Model("ana_reference"),
+    Model("ana_neutron_rich", electron_fraction=.1),
+    Model("ana_steeper_tail", mass_msun=3e-4, tail_exponent=16,
+          luminosity_iso_erg_s=1e52, launch_s=2.),
+)
+NUMERICAL = (
+    Model("num_dd2_equal", "numerical", luminosity_iso_erg_s=1e52,
+          profile="outflow_files_jet_propagation/Archive/wdir/dd2_analysis/"
+                  "DD2_M135135_M1_K2_SR/outflow_1_ber_out/lagrangian_profile.h5"),
+    Model("num_sfho", "numerical", luminosity_iso_erg_s=1e53,
+          profile="jet_propagation/jet_propagation/profile_files/new/"
+                  "SFHo_M135-135_M1_SR/outflow_1_ber_hmin_out/lagrangian_profile.h5"),
+    Model("num_sly", "numerical", luminosity_iso_erg_s=1e52,
+          profile="jet_propagation/jet_propagation/profile_files/new/"
+                  "SLy_M145-125_M1_SR_v2/outflow_1_ber_hmin_out/lagrangian_profile.h5"),
 )
 
 
-def build(model: Model):
-    if model.kind == "numerical":
-        path = Path(model.profile)
-        return NumericalEjecta.from_hdf5(
-            path,
-            bin_name="itheta=00000",
-            solid_angle_sr=solid_angle(path, "itheta=00000"),
-            beta_width=model.width,
-            kernel_shape=2,
-            cutoff_mode="smooth",
-            integration_samples=128,
-        )
-    return BrokenPowerLaw(
-        mass_msun=model.mass_msun,
-        break_beta=0.3,
-        max_beta=0.6,
-        tail=True,
-        tail_exponent=model.tail_exponent,
-        tail_extent=1.1,
+def build(model: Model, data_root: Path, *, fine: int = 0):
+    if model.kind == "analytical":
+        return HomologousTail(mass_msun=model.mass_msun, tail_exponent=model.tail_exponent)
+    path = data_root / model.profile
+    with h5py.File(path) as handle:
+        theta = np.asarray(handle["theta"])
+        spacing = theta[1] - theta[0]
+        angle = 2*np.pi*(np.cos(theta[0]-spacing/2)-np.cos(theta[0]+spacing/2))
+    return NumericalEjecta.from_hdf5(
+        path, bin_name="itheta=00000", extraction_radius_cm=4.42e7,
+        solid_angle_sr=float(angle), cutoff_mode="smooth", kernel_shape=2., beta_width=.05,
+        integration_samples=256*2**fine, history_subsamples=2**fine,
     )
 
 
-def solve(model: Model):
-    ejecta = build(model)
+def sample_solution(jet: JetHead, trajectory: PropagationResult, count: int = 201):
+    """Select a reproducible physical time, independent of the integration step."""
+    start = trajectory.time_s[0]
+    stop = start + .99*(trajectory.time_s[-1]-start)
+    times = np.linspace(start, stop, count)
+    radii = np.interp(times, trajectory.time_s, trajectory.radius_cm)
+    states = np.array([jet.state(float(r), float(t)) for r, t in zip(radii, times, strict=True)])
+    return PropagationResult(times, radii, states[:, 0], states[:, 1], states[:, 2], False)
+
+
+def solve(model: Model, data_root: Path, *, fine: int = 0):
+    ejecta = build(model, data_root, fine=fine)
+    launch_radius = max(8.45e7, ejecta.inner_radius(model.launch_s)*1.01)
     engine = ConstantEngine.from_isotropic_equivalent(
-        model.luminosity_iso,
-        launch_time_s=model.launch_s,
-        launch_radius_cm=8.45e7,
-        opening_angle_rad=np.deg2rad(10),
-        lorentz_factor=100,
+        model.luminosity_iso_erg_s, launch_time_s=model.launch_s,
+        launch_radius_cm=launch_radius, opening_angle_rad=np.deg2rad(10),
+        lorentz_factor=100, duration_s=60.,
     )
-    jet = JetHead(engine, ejecta, breakout_optical_depth_samples=256)
-    trajectory = jet.propagate(max_time_s=model.launch_s + 20, time_step_s=5e-3)
+    jet = JetHead(engine, ejecta, breakout_optical_depth_samples=192*2**fine)
+    trajectory = jet.propagate(max_time_s=model.launch_s+60,
+                               time_step_s=.01/2**fine)
     if not trajectory.broke_out:
-        raise RuntimeError(f"selected model did not break out: {model.name}")
-    config = NpcConfig(path_length="radius")
-    return ejecta, jet, trajectory, config, evaluate_npc_inputs(
-        trajectory, ejecta, config=config
-    )
+        raise RuntimeError(f"{model.name} did not break out; no transfer archive created")
+    config = NpcConfig(electron_fraction=model.electron_fraction,
+                       exterior_mass_samples=256*2**fine)
+    npc = evaluate_npc_inputs(sample_solution(jet, trajectory), ejecta, config=config)
+    return ejecta, jet, trajectory, config, npc
 
 
-def plot_model(model: Model, ejecta, trajectory, npc, destination: Path) -> None:
-    figure, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
-    for time in (
-        trajectory.time_s[0],
-        trajectory.time_s[len(trajectory.time_s) // 2],
-        trajectory.time_s[-1],
-    ):
-        radius = np.geomspace(
-            ejecta.inner_radius(float(time)) * 1.001,
-            ejecta.optical_depth_outer_radius(float(time)) * 0.999,
-            220,
-        )
-        density = np.asarray(ejecta.density(radius, float(time)))
-        beta = np.asarray(ejecta.velocity(radius, float(time))) / SPEED_OF_LIGHT
-        x = radius / ejecta.outer_radius(float(time))
-        axes[0, 0].plot(x, density, label=f"t={time:.2g} s")
-        axes[0, 1].plot(x, beta, label=f"t={time:.2g} s")
-    positive = np.concatenate([line.get_ydata() for line in axes[0, 0].lines])
-    top = positive.max()
-    axes[0, 0].set(
-        xscale="log",
-        yscale="log",
-        ylim=(top * 1e-8, top * 3),
-        xlabel=r"$r/r_{max}$",
-        ylabel=r"$\rho$ [g cm$^{-3}$]",
-    )
-    axes[0, 1].set(xscale="log", xlabel=r"$r/r_{max}$", ylabel=r"$\beta_a$")
+def relative_error(a: float, b: float) -> float:
+    return float(abs(a-b)/max(abs(a), abs(b), 1e-100))
+
+
+def audit_model(coarse: tuple, fine: tuple) -> dict:
+    """Refine time, radial, recorded-history and exterior-mass quadratures."""
+    ej, jet, tr, _, npc = fine
+    errors = {"breakout_time_s": relative_error(coarse[2].breakout_time_s, tr.breakout_time_s)}
+    errors.update({name: relative_error(getattr(coarse[4], name)[-1], getattr(npc, name)[-1])
+                   for name in CHECK_FIELDS})
+    beta = jet.shock_beta_in_ambient_frame(tr.head_beta[-1], tr.ambient_beta[-1])
+    tau = ej.optical_depth(tr.breakout_radius_cm, tr.breakout_time_s, samples=1536)
+    errors["breakout_condition"] = abs(tau*beta-1)
+    errors["passed"] = bool(max(errors.values()) < .05)
+    if not errors["passed"]:
+        raise RuntimeError(f"resolution check failed: {errors}")
+    return errors
+
+
+def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: Path):
+    ejecta, jet, trajectory, config, npc = solution
+    group = handle.require_group("models").create_group(model.name)
+    group.attrs["npc_schema"] = "jetbns.npc-inputs.v4"
+    group.attrs["composition"] = "free-proton proxy plus Metzger free-neutron skin"
+    group.attrs["sample_fraction_of_propagation"] = .99
+    group.attrs["breakout_time_s"] = trajectory.breakout_time_s
+    group.attrs["breakout_radius_cm"] = trajectory.breakout_radius_cm
+    group.attrs["sample_lag_before_breakout_s"] = trajectory.breakout_time_s-npc.time_s[-1]
+    group.attrs["kind"] = model.kind
+    level = int(np.log2(config.exterior_mass_samples/256))
+    group.attrs["resolution_level"] = level
+    group.attrs["ode_time_step_s"] = .01/2**level
+    group.attrs["breakout_radial_samples"] = jet.breakout_optical_depth_samples
+    engine_age = jet.engine.retarded_time(trajectory.breakout_radius_cm,
+                                         trajectory.breakout_time_s) - model.launch_s
+    group.attrs["engine_active_age_at_breakout_s"] = engine_age
+    group.attrs["one_sided_energy_supplied_erg"] = engine_age*jet.engine.luminosity_erg_s
+    columns = group.create_group("snapshot_columns")
+    for key, value in snapshot_columns(ejecta, config, npc.radius_cm[-1], npc.time_s[-1]).items():
+        ds = columns.create_dataset(key, data=value)
+        ds.attrs["unit"] = "1"
+        ds.attrs["frame"] = "frozen lab-time radial profile; see PDF"
+    for field in fields(npc):
+        ds = group.create_dataset(field.name, data=getattr(npc, field.name), compression="gzip")
+        ds.attrs["unit"] = NPC_UNITS[field.name]
+        ds.attrs["frame"] = field_frame(field.name)
+    group["pn_optical_depth"].attrs["role"] = "legacy total-baryon reference"
+    group["gyration_parameter"].attrs["role"] = "legacy baryon-target estimate"
+    group["proton_number_density_cm3"].attrs["role"] = "assumed free fraction times Ye rho/mp"
+    for label, values in (("configuration", asdict(config)), ("engine", asdict(jet.engine)),
+                          ("model_parameters", asdict(model)), ("convergence", checks)):
+        settings = group.create_group(label)
+        for key, value in values.items():
+            if label == "model_parameters" and model.kind == "numerical" and key in (
+                "mass_msun", "tail_exponent",
+            ):
+                continue
+            settings.attrs[key] = value
+    if model.kind == "numerical":
+        settings = group.create_group("numerical_profile")
+        for key in ("extraction_radius_cm", "beta_width", "kernel_shape", "cutoff_mode",
+                    "integration_samples", "history_subsamples", "post_simulation_mass_index",
+                    "post_simulation_velocity_index"):
+            settings.attrs[key] = getattr(ejecta, key)
+        settings.attrs["velocity_source"] = "recorded vel; NOT Bernoulli asymptotic velocity"
+        settings.attrs["source_sha256"] = hashlib.sha256(
+            (data_root/model.profile).read_bytes()).hexdigest()
+        settings.attrs["recorded_time_start_s"] = ejecta.history.time_s[0]
+        settings.attrs["recorded_time_end_s"] = ejecta.history.time_s[-1]
+        settings.attrs["recorded_samples"] = len(ejecta.history.time_s)
+        settings.attrs["solid_angle_sr"] = ejecta.history.solid_angle_sr
+    else:
+        settings = group.create_group("analytical_ejecta")
+        for key, value in asdict(ejecta).items():
+            settings.attrs[key] = value
+    return {name: float(getattr(npc, name)[-1]) for name in SUMMARY_FIELDS}
+
+
+def snapshot_columns(ejecta, config, radius, time) -> dict[str, float]:
+    """Outward ultrarelativistic attenuation through a frozen radial profile."""
+    r = np.geomspace(radius, ejecta.optical_depth_outer_radius(time), 1536)
+    rho = np.asarray(ejecta.density(r, time))
+    lab_density = np.asarray(ejecta.lab_mass_density(r, time))
+    beta = np.asarray(ejecta.velocity(r, time))/SPEED_OF_LIGHT
+    integrand = 4*np.pi*r**2*lab_density
+    increments = .5*(integrand[:-1]+integrand[1:])*np.diff(r)
+    mass_above = np.append(np.cumsum(increments[::-1])[::-1], 0)/SOLAR_MASS
+    ye = (np.asarray(ejecta.electron_fraction(r, time))
+          if isinstance(ejecta, NumericalEjecta) and ejecta.history.electron_fraction is not None
+          else np.full_like(r, config.electron_fraction))
+    fraction = metzger_free_neutron_fraction(ye, mass_above, time,
+        transition_mass_msun=config.free_neutron_transition_mass_msun,
+        decay_time_s=config.free_neutron_decay_time_s)
+    path_factor = np.sqrt((1-beta)/(1+beta))  # Gamma_a (1-beta_a), radial fast projectile
+    return {
+        "neutron_on_proton_radial_column_depth": float(np.trapezoid(
+            config.proton_free_fraction*ye*rho/PROTON_MASS
+            * config.pn_cross_section_cm2*path_factor, r)),
+        "proton_on_neutron_radial_column_depth": float(np.trapezoid(
+            fraction*rho/PROTON_MASS*config.pn_cross_section_cm2*path_factor, r)),
+        "grey_radial_optical_depth": float(np.trapezoid(.16*rho, r)),
+    }
+
+
+def field_frame(name: str) -> str:
+    if name == "shock_beta_downstream_frame":
+        return "downstream fluid rest"
+    if name == "shock_beta_upstream_frame":
+        return "upstream fluid rest"
+    if name in ("relative_lorentz_factor", "hydrodynamic_compression_ratio"):
+        return "dimensionless upstream/downstream relation"
+    if name in ("time_s", "radius_cm", "path_length_cm", "head_beta", "ambient_beta",
+                "head_lorentz_factor", "ambient_lorentz_factor"):
+        return "lab"
+    if name.startswith("downstream_") or name.startswith("max_lorentz"):
+        return "downstream fluid (jet-head proxy); approximate"
+    if name.startswith("max_observer") or name.startswith("observer_"):
+        return "observer boost convention, not viewing-angle Doppler factor"
+    if name in ("electron_fraction", "free_neutron_mass_fraction", "exterior_mass_msun"):
+        return "composition / lab-slice mass"
+    return "upstream rest or dimensionless; see PDF"
+
+
+def plot_model(model, solution, output):
+    ej, _, tr, _, npc = solution
+    fig, axes = plt.subplots(2, 3, figsize=(13, 7), constrained_layout=True)
+    for t in np.linspace(tr.time_s[0], tr.time_s[-1], 3):
+        r = np.geomspace(ej.inner_radius(t)*1.01, ej.optical_depth_outer_radius(t)*.999, 250)
+        rho = ej.density(r, t)
+        keep = rho > max(rho.max()*1e-16, npc.upstream_density_g_cm3[-1]*1e-3)
+        axes[0, 0].loglog(r[keep], rho[keep], label=f"{t:.2f} s")
+    axes[0, 0].set(xlabel="radius [cm]", ylabel=r"proper density [g cm$^{-3}$]")
     axes[0, 0].legend(fontsize=8)
-    time = trajectory.time_s
-    axes[1, 0].plot(time, trajectory.radius_cm, label="jet head")
-    axes[1, 0].plot(time, [ejecta.outer_radius(float(t)) for t in time], "--", label=r"$r_{max}$")
-    axes[1, 0].set(xlabel="time [s]", ylabel="radius [cm]", yscale="log")
-    axes[1, 0].legend()
-    axes[1, 1].plot(
-        npc.time_s, npc.neutron_to_proton_optical_depth, label=r"$\tau_{n\to p}$"
-    )
-    axes[1, 1].plot(
-        npc.time_s, npc.proton_to_neutron_optical_depth, label=r"$\tau_{p\to n}$"
-    )
-    axes[1, 1].plot(npc.time_s, npc.relative_lorentz_factor, label=r"$\Gamma_{rel}$")
-    axes[1, 1].plot(npc.time_s, npc.gyration_parameter, label=r"$\xi(1)$")
-    axes[1, 1].axhspan(0.1, 2, color="tab:green", alpha=0.12)
-    axes[1, 1].set(xlabel="time [s]", ylabel="NPC quantities", yscale="log")
-    axes[1, 1].legend()
-    figure.suptitle(
-        f"{model.name}: {model.kind}, Liso={model.luminosity_iso:.0e} erg/s, "
-        f"tlaunch={model.launch_s:g} s"
-    )
-    figure.savefig(destination, dpi=170)
-    plt.close(figure)
+    axes[0, 1].plot(tr.time_s, tr.radius_cm/1e11, label="jet head")
+    nominal = getattr(ej, "nominal_outer_radius", ej.outer_radius)
+    axes[0, 1].plot(tr.time_s, [nominal(t)/1e11 for t in tr.time_s], "--", label="nominal edge")
+    axes[0, 1].set(xlabel="time [s]", ylabel=r"radius [$10^{11}$ cm]")
+    axes[0, 1].legend(fontsize=8)
+    axes[0, 2].plot(npc.time_s, npc.relative_lorentz_factor)
+    axes[0, 2].set(xlabel="time [s]", ylabel=r"$\Gamma_{rel}$")
+    near = npc.time_s >= tr.time_s[0]+.9*(tr.time_s[-1]-tr.time_s[0])
+    remaining = tr.time_s[-1]-npc.time_s[near]
+    for values, label in ((npc.proton_number_density_cm3, r"$n_p$ proxy"),
+                           (npc.free_neutron_number_density_cm3, r"$n_n$ free")):
+        axes[1, 0].plot(remaining, values[near], label=label)
+    axes[1, 0].set(xlabel="time before breakout [s]", ylabel=r"number density [cm$^{-3}$]")
+    axes[1, 0].legend(fontsize=8)
+    for values, label in ((npc.neutron_to_proton_optical_depth, "n on p"),
+                           (npc.proton_to_neutron_optical_depth, "p on n")):
+        axes[1, 1].plot(remaining, values[near], label=label)
+    axes[1, 1].set(xlabel="time before breakout [s]", ylabel="local collision depth")
+    axes[1, 1].legend(fontsize=8)
+    axes[1, 2].plot(remaining, npc.downstream_temperature_kev[near])
+    axes[1, 2].set(xlabel="time before breakout [s]", ylabel=r"estimated $kT_d$ [keV]")
+    for ax in axes[1]:
+        ax.invert_xaxis()
+        ax.grid(alpha=.2)
+    fig.suptitle(model.name + " (reference scenario)")
+    fig.savefig(output/f"{model.name}.png", dpi=150)
+    plt.close(fig)
 
 
-def plot_overview(rows: list[tuple], destination: Path):
-    """Compare the pre-breakout species quantities across all models."""
-    names = [row[0] for row in rows]
-    colors = ["tab:blue" if row[1] == "numerical" else "tab:orange" for row in rows]
+def plot_overview(rows, output):
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)
     x = np.arange(len(rows))
-    figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
-    quantities = (
-        (14, r"$\Gamma_{rel}$"),
-        (15, r"$n_p$ [cm$^{-3}$]"),
-        (16, r"$n_n^{free}$ [cm$^{-3}$]"),
-        (18, r"$\tau_{p\to n}$"),
+    labels = [r["name"] for r in rows]
+    for ax, key, title in zip(axes, ("relative_lorentz_factor", "neutron_to_proton_optical_depth",
+                                    "proton_to_neutron_optical_depth"),
+                              (r"$\Gamma_{rel}$", "n on p: local depth", "p on n: local depth"),
+                              strict=True):
+        ax.scatter(x, [r[key] for r in rows])
+        ax.set(xticks=x, xticklabels=labels, ylabel=title)
+        ax.tick_params(axis="x", rotation=60, labelsize=8)
+        ax.grid(alpha=.2)
+    fig.savefig(output/"npc_prebreakout_overview.png", dpi=160)
+    plt.close(fig)
+
+
+def write_latex_report(rows, output):
+    template = ROOT/"docs/npc_model_notes.tex"
+    table = "\n".join(
+        r"\texttt{"+row["name"].replace("_", r"\_")+"} & " + " & ".join(
+            f"{row[k]:.3g}" for k in ("relative_lorentz_factor", "electron_fraction",
+                "proton_number_density_cm3", "free_neutron_number_density_cm3",
+                "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth")
+        )+r" \\" for row in rows
     )
-    for axis, (column, label) in zip(axes.flat, quantities, strict=True):
-        axis.scatter(x, [row[column] for row in rows], c=colors, s=45)
-        axis.set(ylabel=label, xticks=x, xticklabels=names)
-        axis.tick_params(axis="x", rotation=55, labelsize=8)
-        if column == 15:
-            axis.set_yscale("log")
-        elif column in (16, 18):
-            axis.set_ylim(bottom=0)
-    axes[0, 0].axhline(2, color="0.4", linestyle="--", linewidth=1)
-    axes[1, 1].axhspan(0.1, 2, color="tab:green", alpha=0.12)
-    figure.suptitle(
-        "NPC quantities immediately before shock breakout\n"
-        "blue: numerical; orange: analytical"
-    )
-    figure.savefig(destination, dpi=180)
-    return figure
-
-
-def _latex_escape(value: str) -> str:
-    return value.replace("_", r"\_")
-
-
-def write_latex_report(rows: list[tuple], output: Path) -> Path:
-    """Write and compile the concise data-interface note with LaTeX."""
-    table_rows = "\n".join(
-        f"{_latex_escape(row[0])} & {_latex_escape(row[1])} & {row[8]:.3g} & "
-        f"{row[14]:.3g} & {row[15]:.2e} & {row[16]:.2e} & "
-        f"{row[17]:.3g} & {row[18]:.3g} \\\\" for row in rows
-    )
-    source = rf"""\documentclass[10pt]{{article}}
-\usepackage[a4paper,margin=1.6cm]{{geometry}}
-\usepackage{{amsmath,graphicx,array}}
-\setlength{{\parindent}}{{0pt}}
-\begin{{document}}
-\begin{{center}}\Large\bfseries Representative jetBNS NPC inputs\end{{center}}
-
-\textbf{{Files to transfer.}} Transfer exactly
-\texttt{{npc\_prebreakout\_models.h5}} and this PDF. The HDF5 file is the
-machine-readable input. This document defines its content. The PNG files and
-Python scripts are optional diagnostics and reproducibility material.
-
-\section*{{Physical definitions}}
-The species-resolved estimates are
-\begin{{align}}
-n_p &= Y_e\rho/m_p,\\
-X_{{n,\mathrm{{free}}}} &= \max(0,1-2Y_e)\frac{{2}}{{\pi}}
-\tan^{{-1}}\!\left(\frac{{m_n}}{{m_{{\rm above}}}}\right)e^{{-t/\tau_n}},\\
-n_n &= X_{{n,\mathrm{{free}}}}\rho/m_p,\\
-\tau_{{n\rightarrow p}} &= n_p\sigma_{{pn}}\Delta r/\Gamma_a,\qquad
-\tau_{{p\rightarrow n}} = n_n\sigma_{{pn}}\Delta r/\Gamma_a.
-\end{{align}}
-Defaults are $m_n=10^{{-4}}M_\odot$, $\tau_n=900$ s,
-$\Delta r=r$, and $\sigma_{{pn}}=3\times10^{{-26}}$ cm$^2$.
-Numerical profiles use local $Y_e$; analytical profiles use $Y_e=0.1$.
-These are phenomenological free-nucleon estimates. Bound nuclei and nuclear
-reaction-network evolution are not included.
-
-\section*{{How to read the HDF5 file}}
-Use \texttt{{/models/<model>/}} for the time series supplied to the Monte
-Carlo. The arrays have equal length and each dataset has a \texttt{{unit}}
-attribute. The primary arrays are
-\texttt{{time\_s}}, \texttt{{radius\_cm}},
-\texttt{{relative\_lorentz\_factor}},
-\texttt{{proton\_number\_density\_cm3}},
-\texttt{{free\_neutron\_number\_density\_cm3}},
-\texttt{{neutron\_to\_proton\_optical\_depth}}, and
-\texttt{{proton\_to\_neutron\_optical\_depth}}.
-The last array element is the last integration point before breakout.
-The group \texttt{{/prebreakout\_summary/}} contains one scalar row per model
-for rapid model selection; it is not a replacement for the trajectories.
-
-\begin{{verbatim}}
-import h5py
-with h5py.File("npc_prebreakout_models.h5") as f:
-    model = f["models/num_sfho"]
-    time = model["time_s"][:]
-    gamma_rel = model["relative_lorentz_factor"][:]
-    n_p = model["proton_number_density_cm3"][:]
-    n_n = model["free_neutron_number_density_cm3"][:]
-    tau_np = model["neutron_to_proton_optical_depth"][:]
-    tau_pn = model["proton_to_neutron_optical_depth"][:]
-\end{{verbatim}}
-
-\section*{{Pre-breakout values}}
-\scriptsize
-\begin{{center}}
-\begin{{tabular}}{{l l r r r r r r}}
-Model & Type & $t_{{bo}}$ [s] & $\Gamma_{{rel}}$ & $n_p$ & $n_n$ &
-$\tau_{{n\to p}}$ & $\tau_{{p\to n}}$\\ \hline
-{table_rows}
-\end{{tabular}}
-\end{{center}}
-\normalsize
-Number densities are in cm$^{{-3}}$. Four numerical profiles have
-$Y_e\geq0.5$ at the sampled location and hence $n_n=0$ in this prescription.
-SFHo has $\tau_{{p\to n}}\simeq1.06$. The analytical cases have
-$\tau_{{n\to p}}\simeq0.63$--$1.50$ and
-$\tau_{{p\to n}}\simeq5.01$--$11.83$.
-
-\newpage
-\begin{{center}}
-\includegraphics[width=0.96\textwidth]{{npc_prebreakout_overview.png}}
-\end{{center}}
-\end{{document}}
-"""
-    tex_path = output / "npc_model_notes.tex"
-    tex_path.write_text(source)
+    tex = output/"npc_model_notes.tex"
+    tex.write_text(template.read_text().replace("% MODEL_TABLE", table))
     executable = shutil.which("pdflatex")
     if executable is None:
-        raise RuntimeError("pdflatex is required to build npc_model_notes.pdf")
-    subprocess.run(
-        [executable, "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
-        cwd=output,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    return output / "npc_model_notes.pdf"
+        raise RuntimeError("Install texlive-latex-base (pdflatex) to generate the PDF")
+    for _ in range(2):
+        subprocess.run([executable, "-no-shell-escape", "-interaction=nonstopmode",
+                        "-halt-on-error", tex.name], cwd=output, check=True,
+                       stdout=subprocess.DEVNULL)
+    return output/"npc_model_notes.pdf"
 
 
-def write_hdf5(rows: list[tuple], trajectories: list[tuple], destination: Path) -> None:
-    names = (
-        "name", "kind", "profile", "launch_time_s", "luminosity_iso_erg_s",
-        "beta_width", "mass_msun", "tail_exponent", "breakout_time_s",
-        "breakout_radius_cm", "breakout_radius_over_nominal", "prebreakout_time_s",
-        "prebreakout_radius_cm", "electron_fraction", "relative_lorentz_factor",
-        "proton_number_density_cm3", "free_neutron_number_density_cm3",
-        "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth",
-        "gyration_parameter", "downstream_temperature_kev",
-        "breakout_electron_optical_depth", "shock_beta_ambient_frame",
-    )
-    units = {
-        "launch_time_s": "s", "luminosity_iso_erg_s": "erg s^-1",
-        "beta_width": "1", "mass_msun": "Msun", "tail_exponent": "1",
-        "breakout_time_s": "s", "breakout_radius_cm": "cm",
-        "breakout_radius_over_nominal": "1", "prebreakout_time_s": "s",
-        "prebreakout_radius_cm": "cm", "electron_fraction": "1",
-        "relative_lorentz_factor": "1", "proton_number_density_cm3": "cm^-3",
-        "free_neutron_number_density_cm3": "cm^-3",
-        "neutron_to_proton_optical_depth": "1",
-        "proton_to_neutron_optical_depth": "1", "gyration_parameter": "1",
-        "downstream_temperature_kev": "keV", "breakout_electron_optical_depth": "1",
-        "shock_beta_ambient_frame": "1",
-    }
-    with h5py.File(destination, "w") as handle:
-        handle.attrs["schema"] = "jetbns.npc-model-export.v1"
-        handle.attrs["description"] = (
-            "Five numerical and five analytical models sampled immediately before breakout"
-        )
-        handle.attrs["caveat"] = "Phenomenological free-nucleon composition; no Monte Carlo"
-        summary = handle.create_group("prebreakout_summary")
-        strings = h5py.string_dtype("utf-8")
-        for index, name in enumerate(names):
-            values = [row[index] for row in rows]
-            dataset = summary.create_dataset(
-                name, data=values, dtype=strings if index < 3 else None
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--include-numerical", action="store_true")
+    parser.add_argument("--data-root", type=Path, default=ROOT.parent)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    args = parser.parse_args()
+    models = ANALYTICAL + NUMERICAL if args.include_numerical else ANALYTICAL
+    args.output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="npc-build-", dir=args.output) as temp:
+        out = Path(temp)
+        plots = out/"plots"
+        plots.mkdir()
+        rows = []
+        hdf5 = out/"npc_prebreakout_models.h5"
+        with h5py.File(hdf5, "w") as handle:
+            handle.attrs["schema"] = SCHEMA
+            handle.attrs["generator_sha256"] = hashlib.sha256(
+                Path(__file__).read_bytes()).hexdigest()
+            for source in ("ejecta", "npc", "propagation", "engines"):
+                handle.attrs[f"{source}_code_sha256"] = hashlib.sha256(
+                    (ROOT/f"src/jetbns/{source}.py").read_bytes()).hexdigest()
+            handle.attrs["status"] = "resolution-tested scenarios; approximate composition"
+            handle.attrs["supersedes"] = (
+                "all pre-audit numerical exports: unresolved launch history"
             )
-            if name in units:
-                dataset.attrs["unit"] = units[name]
-        models = handle.create_group("models")
-        for model, config, npc in trajectories:
-            group = models.create_group(model.name)
-            group.attrs["kind"] = model.kind
-            group.attrs["launch_time_s"] = model.launch_s
-            group.attrs["luminosity_iso_erg_s"] = model.luminosity_iso
-            group.attrs["electron_fraction_fallback"] = config.electron_fraction
-            for field in fields(npc):
-                dataset = group.create_dataset(field.name, data=getattr(npc, field.name))
-                dataset.attrs["unit"] = NPC_UNITS[field.name]
-
-
-def main() -> None:
-    output = Path(__file__).parent / "output" / "npc_model_export"
-    plots = output / "plots"
-    plots.mkdir(parents=True, exist_ok=True)
-    rows = []
-    trajectories = []
-    for model in MODELS:
-        ejecta, jet, trajectory, config, npc = solve(model)
-        i = -1
-        hb, ab, _ = jet.state(trajectory.breakout_radius_cm, trajectory.breakout_time_s)
-        shock_beta = jet.shock_beta_in_ambient_frame(hb, ab)
-        tau_breakout = ejecta.optical_depth(
-            trajectory.breakout_radius_cm, trajectory.breakout_time_s, samples=512
-        )
-        if hasattr(ejecta, "electron_fraction"):
-            electron_fraction = float(ejecta.electron_fraction(npc.radius_cm[i], npc.time_s[i]))
-        else:
-            electron_fraction = config.electron_fraction
-        rows.append(
-            (
-                model.name,
-                model.kind,
-                model.profile,
-                model.launch_s,
-                model.luminosity_iso,
-                model.width,
-                model.mass_msun,
-                model.tail_exponent,
-                trajectory.breakout_time_s,
-                trajectory.breakout_radius_cm,
-                trajectory.breakout_radius_cm / ejecta.outer_radius(trajectory.breakout_time_s),
-                npc.time_s[i],
-                npc.radius_cm[i],
-                electron_fraction,
-                npc.relative_lorentz_factor[i],
-                npc.proton_number_density_cm3[i],
-                npc.free_neutron_number_density_cm3[i],
-                npc.neutron_to_proton_optical_depth[i],
-                npc.proton_to_neutron_optical_depth[i],
-                npc.gyration_parameter[i],
-                npc.downstream_temperature_kev[i],
-                tau_breakout,
-                shock_beta,
+            handle.attrs["optical_depth_definition"] = (
+                "local n sigma r/Gamma_a, not integrated column"
             )
-        )
-        trajectories.append((model, config, npc))
-        plot_model(model, ejecta, trajectory, npc, plots / f"{model.name}.png")
-        print(f"finished {model.name}", flush=True)
-    hdf5_path = output / "npc_prebreakout_models.h5"
-    write_hdf5(rows, trajectories, hdf5_path)
-    overview = plot_overview(rows, output / "npc_prebreakout_overview.png")
-    report = write_latex_report(rows, output)
-    archive = output / "npc_monte_carlo_inputs.zip"
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        bundle.write(hdf5_path, arcname=hdf5_path.name)
-        bundle.write(report, arcname=report.name)
-    plt.close(overview)
-    print(f"wrote {hdf5_path}")
-    print(f"wrote {report}")
-    print(f"wrote {archive}")
+            handle.attrs["snapshot_fraction"] = .99
+            for model in models:
+                coarse = solve(model, args.data_root)
+                for level in range(1, 4):
+                    fine = solve(model, args.data_root, fine=level)
+                    try:
+                        checks = audit_model(coarse, fine)
+                        break
+                    except RuntimeError:
+                        if level == 3:
+                            raise
+                        print(f"{model.name}: refining to level {level+1}", flush=True)
+                        coarse = fine
+                row = write_model(handle, model, fine, checks, args.data_root)
+                row["name"] = model.name
+                rows.append(row)
+                plot_model(model, fine, plots)
+                error = max(v for k, v in checks.items() if k != "passed")
+                print(f"{model.name}: t_bo={fine[2].breakout_time_s:.4g} s; "
+                      f"Gamma_rel={row['relative_lorentz_factor']:.3g}; "
+                      f"tau_np={row['neutron_to_proton_optical_depth']:.3g}; "
+                      f"tau_pn={row['proton_to_neutron_optical_depth']:.3g}; "
+                      f"max error={error:.2%}", flush=True)
+            summary = handle.create_group("prebreakout_summary")
+            summary.create_dataset("name", data=[r["name"] for r in rows],
+                                   dtype=h5py.string_dtype("utf-8"))
+            for name in SUMMARY_FIELDS:
+                ds = summary.create_dataset(name, data=[r[name] for r in rows])
+                ds.attrs["unit"] = NPC_UNITS[name]
+        plot_overview(rows, out)
+        report = write_latex_report(rows, out)
+        reader = Path(__file__).with_name("read_npc_inputs.py")
+        shutil.copy2(reader, out/reader.name)
+        subprocess.run([sys.executable, str(reader), str(hdf5)], check=True)
+        archive = out/"npc_monte_carlo_inputs.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for path in (hdf5, report):
+                bundle.write(path, arcname=path.name)
+        for path in out.iterdir():
+            destination = args.output/path.name
+            if path.is_dir():
+                shutil.copytree(path, destination, dirs_exist_ok=True)
+            else:
+                shutil.copy2(path, destination)
+    print(f"Transfer: {args.output/'npc_monte_carlo_inputs.zip'}")
 
 
 if __name__ == "__main__":

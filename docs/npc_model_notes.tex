@@ -1,0 +1,188 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=1.7cm]{geometry}
+\usepackage{amsmath,graphicx,array,hyperref}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\newcommand{\field}[1]{\texttt{\detokenize{#1}}}
+\begin{document}
+\begin{center}\Large\bfseries jetbns: inputs for NPC transport\end{center}
+\textbf{Transfer only \field{npc_monte_carlo_inputs.zip}.}
+
+It contains this PDF and the data file \field{npc_prebreakout_models.h5}.
+The repository includes optional validator \field{read_npc_inputs.py}. It needs
+NumPy and h5py, but neither jetbns, LaTeX, nor the original hydrodynamic files.
+\begin{verbatim}
+python -m pip install numpy h5py
+python read_npc_inputs.py
+python read_npc_inputs.py --model ana_reference
+\end{verbatim}
+The first command to the optional reader validates the file and lists model names.
+The second prints all input scalars at the selected pre-breakout snapshot as JSON.
+Use \field{ana_reference} for a simple first integration check. Each scenario
+is a candidate for a transport calculation; no NPC efficiency is inferred here.
+
+\section*{Data contract}
+The root schema is \field{jetbns.npc-model-export.v2}. Versions predating the
+audit must be regenerated: they can severely underresolve the measured outflow.
+The group \field{/models/<name>/} contains 201 time samples of each quantity.
+The last sample is at
+\[
+t_* = t_{\rm start}+0.99(t_{\rm bo}-t_{\rm start}).
+\]
+This is a fixed physical sampling prescription, independent of the ODE step.
+It is close to breakout, but not the immediately preceding solver step.
+The exact breakout time and the remaining time to breakout are group attributes.
+The separate \field{/prebreakout_summary/} gives one endpoint per model.
+
+Every numeric series has \field{unit} and \field{frame} attributes. Read actual
+arrays for a time-dependent calculation, or use the final row for a locally
+steady shock. Time and radius are laboratory coordinates; densities and the
+assumed field are upstream rest-frame quantities. The jet head is used as an
+approximate downstream fluid velocity. Its speed is distinct from the shock speed.
+\begin{verbatim}
+import h5py
+with h5py.File("npc_prebreakout_models.h5") as f:
+    g = f["models/ana_reference"]
+    n_p = g["proton_number_density_cm3"][-1]
+    n_n = g["free_neutron_number_density_cm3"][-1]
+    B_u = g["upstream_magnetic_field_g"][-1]
+    Gamma_rel = g["relative_lorentz_factor"][-1]
+    beta_s_u = g["shock_beta_upstream_frame"][-1]
+    beta_s_d = g["shock_beta_downstream_frame"][-1]
+    length_u = g["effective_path_length_upstream_cm"][-1]
+\end{verbatim}
+
+\section*{Model endpoints}
+\begin{center}\footnotesize
+\begin{tabular}{lrrrrrr}
+Model & $\Gamma_{\rm rel}$ & $Y_e$ & $n_p$ [cm$^{-3}$] & $n_n$ [cm$^{-3}$]
+& $\tau_{n:p}$ & $\tau_{p:n}$\\\hline
+% MODEL_TABLE
+\end{tabular}\end{center}
+The two density columns have different physical meanings, explained on the next
+page. A zero neutron excess is allowed and is not replaced by a numerical floor.
+
+\newpage
+\section*{Target densities and collision rates}
+Let $n_b=\rho_u/m_p$ use upstream proper mass density. The prescription is
+\begin{align}
+X_{n,0}&=\max(0,1-2Y_e)\frac{2}{\pi}\arctan(M_n/M_{>r}),&
+X_{n,\rm free}&=X_{n,0}e^{-t/\tau_n},\\
+n_p&=f_{p,\rm free}Y_en_b,& n_n&=X_{n,\rm free}n_b.
+\end{align}
+The defaults are $M_n=10^{-4}M_\odot$, $\tau_n=900$ s, and $f_{p,\rm free}=1$.
+This neutron-skin formula is equation (7) of the arXiv version of Metzger et al.
+\cite{metzger}. The exterior mass includes the Lorentz factor on a lab-time
+slice; for numerical ejecta it sums the individual ballistic contributions.
+Its isotropic-equivalent polar mass convention is an additional approximation
+when applying a spherical skin prescription.
+
+\textbf{Composition limit.} $Y_e\rho/m_p$ counts proton content, including bound
+protons. Treating it as a free-proton density is an explicit upper-proxy assumption,
+controlled by \field{proton_free_fraction}. The neutron estimate is phenomenological,
+not a network abundance. Neutron-decay daughters are not added to the proton proxy,
+and $Y_e$ is held at its reconstructed value. These approximations need review
+for long times, nuclear targets, or large neutron loading.
+
+For a fast projectile the exported target encounter rates and local depths are
+\begin{align}
+\nu_{n:p}&=n_p\sigma_{pn}c,&\nu_{p:n}&=n_n\sigma_{pn}c,\\
+\ell_u&=\Delta r/\Gamma_a,&
+\tau_{n:p}&=n_p\sigma_{pn}\ell_u,\quad \tau_{p:n}=n_n\sigma_{pn}\ell_u.
+\end{align}
+Here $\sigma_{pn}=3\times10^{-26}$ cm$^2$ and $\Delta r=r$ by default.
+The colon means \emph{projectile:target}; the long dataset names use
+\field{neutron_to_proton_optical_depth} and
+\field{proton_to_neutron_optical_depth}. These are encounter depths, not
+charge-conversion probabilities. Transport must supply branching ratios and
+any additional channels such as proton--proton interactions.
+
+\textbf{Length convention.} $r/\Gamma_a$ is the adopted local dynamical length.
+It is not an integrated exterior neutron/proton column or a general Lorentz
+transformation of a stationary shell. If the Monte Carlo uses another geometry,
+recompute its columns from the primitive densities and its own residence times.
+At the endpoint, \field{snapshot_columns} also supplies the outward frozen-profile
+estimates
+\[
+\tau^{\rm col}_{i:j}=\int_{r_*}^{r_{\rm out}}n_j(r,t_*)\sigma_{pn}
+\Gamma_a(r,t_*)[1-\beta_a(r,t_*)],dr.
+\]
+These include the relative-motion factor for an outward ultrarelativistic
+projectile. They can be much smaller than the local dynamical depths. Full
+transport must still account for profile evolution along each particle path.
+
+\section*{Shock, field, and approximate energy diagnostics}
+\[
+\Gamma_{\rm rel}=\Gamma_h\Gamma_a(1-\beta_h\beta_a),\quad
+B_u=10^{13}\,\mathrm{G}\left(10^6\,\mathrm{cm}/r\right)^2,\quad
+\omega_{p,1}=\frac{e B_u}{m_pc}.
+\]
+For the optional cold, unmagnetized $\hat\gamma=4/3$ jump closure,
+\[
+C=4\Gamma_{\rm rel}+3,\quad
+u_{s,u}^2=\frac{(\Gamma_{\rm rel}-1)(4\Gamma_{\rm rel}/3+1)^2}
+{2+8(\Gamma_{\rm rel}-1)/9},\quad u_{s,d}=u_{s,u}/C.
+\]
+Use $\beta_s=u_s/\sqrt{1+u_s^2}$. Advected downstream number densities may be
+estimated as $Cn_u$ only if composition is unchanged across the shock. A transverse
+frozen-in field would give $B_d=CB_u$; the magnetic geometry is a transport choice.
+These closures do not resolve a radiation-mediated shock structure.
+
+The retained diagnostic estimates follow Kashiyama et al. \cite{kashiyama}:
+\[
+k_BT_d=k_B(\rho_uc^2\Gamma_{\rm rel}^2/a)^{1/4},\qquad
+\xi_b=\frac{eB_u}{\sigma_{pn}m_pc^2 n_b},\qquad
+\gamma_{\max}\simeq\min\left(\frac{2m_ec^2}{6k_BT_d},\xi_b\right).
+\]
+\field{gyration_parameter}, \field{pn_optical_depth}, and the energy limits
+retain the baryon-target reference. Use $\omega_{p,1}/\nu$ for a specified
+target population. A formal energy limit below one signals failure of that
+relativistic estimate; it is not a physical particle Lorentz factor. No energy
+spectrum, injection normalization, pitch-angle distribution, conversion
+probability, or acceleration efficiency is supplied by these tables.
+
+\newpage
+\section*{Numerical checks and model limits}
+Each exported model passed a combined resolution comparison: time step
+0.01 versus 0.005 s; breakout radial grid 192 versus 384; exterior-mass grid
+256 versus 512; numerical extrapolation grid 256 versus 512; and native
+outflow epochs versus native epochs plus midpoints. If needed, all grids are
+refined further by factors of two; the final resolution is recorded per model.
+Endpoint relative changes
+must be below 5 percent. An independent 1536-point opacity integral must satisfy
+$|\tau\beta'_s-1|<0.05$. The measured errors are stored under
+\field{convergence}; these check numerical stability, not the physical assumptions.
+
+The initial numerical implementation resampled the short simulation history
+onto a sparse grid extending to seconds. It could miss the mass ejection almost
+entirely. Every recorded epoch is now retained. The previous numerical model
+rankings and zero-neutron conclusions are superseded.
+
+Analytical references use a mass-normalized homologous broken power law with
+an exponential fast tail, $r=\beta ct$, and $\beta_{\rm limit}=0.9$. Numerical
+profiles use recorded velocities and a generalized Gaussian with width
+$\Delta\beta=0.05$ and exponent 2, preserving the smooth tail. The published
+propagation study uses Bernoulli asymptotic velocities \cite{gutierrez}; this
+export therefore is not a numerical reproduction of its figures. Measured
+mass flux is extrapolated as $t^{-5/3}$ and launch velocity as $t^{-1/4}$ after
+the file ends. Kernels are restricted to $0<\beta<1$ without renormalizing the
+lost wings, retaining the existing model convention.
+
+The jet remains conical and uncollimated. Breakout follows the legacy grey
+snapshot criterion $\int\kappa\rho\,dr=1/\beta'_s$, $\kappa=0.16$ cm$^2$ g$^{-1}$.
+This is not moving-medium frequency-dependent radiative transfer. Engine
+duration, power, opening angle, sampling lag, and energy supplied by breakout
+are recorded. Changing composition does not change this fixed-opacity
+propagation solution. The models are controlled inputs for sensitivity studies;
+an order-unity depth in one channel does not establish a successful NPC cycle.
+
+\includegraphics[width=\linewidth]{npc_prebreakout_overview.png}
+\begin{thebibliography}{9}\small
+\bibitem{kashiyama} K. Kashiyama, K. Murase, P. M\'esz\'aros (2013),
+\href{https://arxiv.org/abs/1304.1945}{arXiv:1304.1945}.
+\bibitem{metzger} B. Metzger et al. (2015),
+\href{https://arxiv.org/abs/1409.0544}{arXiv:1409.0544}, Eq. (7).
+\bibitem{gutierrez} E. Guti\'errez et al. (2025),
+\href{https://arxiv.org/abs/2408.15973}{arXiv:2408.15973}.
+\end{thebibliography}
+\end{document}

@@ -1,5 +1,13 @@
 # NPC parameter screening study
 
+**Historical results, superseded for inference.** The numerical reconstruction
+used in the old sweeps could skip most recorded outflow epochs; the analytic
+tail also retains a legacy velocity/expansion inconsistency. The apparent NPC
+region below used the total-baryon depth, not independently defined target
+populations. Regenerate input models with `examples/export_npc_models.py` and
+consult [the scientific audit](scientific_audit.md). No archived success count
+below should be treated as a current physical prediction.
+
 This screening tests whether lower ejecta masses, later jet launches, different
 isotropic-equivalent jet powers, and steeper exponential tails reconcile the
 current jet/ejecta solution with the parameter regime proposed in the local NPC

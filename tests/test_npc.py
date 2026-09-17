@@ -123,7 +123,7 @@ def test_hdf5_export_records_units_configuration_and_metadata(tmp_path) -> None:
     data.to_hdf5(output, config=config, metadata={"model": "test trajectory"})
 
     with h5py.File(output) as handle:
-        assert handle.attrs["schema"] == "jetbns.npc-inputs.v3"
+        assert handle.attrs["schema"] == "jetbns.npc-inputs.v4"
         assert handle["pn_optical_depth"].attrs["unit"] == "1"
         assert handle["proton_number_density_cm3"].attrs["unit"] == "cm^-3"
         assert handle["free_neutron_number_density_cm3"].attrs["unit"] == "cm^-3"

@@ -60,6 +60,8 @@ class NpcConfig:
     electron_fraction: float = 0.1
     free_neutron_transition_mass_msun: float = 1.0e-4
     free_neutron_decay_time_s: float = 900.0
+    proton_free_fraction: float = 1.0
+    exterior_mass_samples: int = 256
 
     def __post_init__(self) -> None:
         positive = (
@@ -67,8 +69,10 @@ class NpcConfig:
             self.magnetic_reference_radius_cm,
             self.pn_cross_section_cm2,
             self.bethe_heitler_wien_factor,
+            self.free_neutron_transition_mass_msun,
+            self.free_neutron_decay_time_s,
         )
-        if any(value <= 0 for value in positive):
+        if any(not np.isfinite(value) or value <= 0 for value in positive):
             raise ValueError("magnetic, cross-section, radius, and Wien values must be positive")
         if not 0 < self.pn_inelasticity <= 1:
             raise ValueError("pn_inelasticity must lie in (0, 1]")
@@ -76,13 +80,28 @@ class NpcConfig:
             raise ValueError("target_nucleon_fraction must lie in (0, 1]")
         if self.path_length not in ("radius", "remaining_ejecta"):
             raise ValueError("path_length must be 'radius' or 'remaining_ejecta'")
-        if not 0 <= self.electron_fraction <= 0.5:
-            raise ValueError("electron_fraction must lie in [0, 0.5]")
+        if not 0 <= self.electron_fraction <= 1:
+            raise ValueError("electron_fraction must lie in [0, 1]")
+        if not 0 <= self.proton_free_fraction <= 1:
+            raise ValueError("proton_free_fraction must lie in [0, 1]")
+        if self.exterior_mass_samples < 16:
+            raise ValueError("exterior_mass_samples must be at least 16")
         if self.free_neutron_transition_mass_msun <= 0 or self.free_neutron_decay_time_s <= 0:
             raise ValueError("free-neutron mass and decay time must be positive")
 
 
 NPC_UNITS = {
+    "electron_fraction": "1",
+    "free_neutron_mass_fraction": "1",
+    "exterior_mass_msun": "Msun",
+    "upstream_baryon_number_density_cm3": "cm^-3",
+    "effective_path_length_upstream_cm": "cm",
+    "neutron_on_proton_collision_rate_s1": "s^-1",
+    "proton_on_neutron_collision_rate_s1": "s^-1",
+    "proton_gyrofrequency_at_gamma_one_s1": "s^-1",
+    "shock_beta_upstream_frame": "1",
+    "shock_beta_downstream_frame": "1",
+    "hydrodynamic_compression_ratio": "1",
     "time_s": "s",
     "radius_cm": "cm",
     "head_beta": "1",
@@ -138,6 +157,17 @@ class NpcInputs:
     max_lorentz_factor: FloatArray
     observer_lorentz_factor: FloatArray
     max_observer_energy_erg: FloatArray
+    electron_fraction: FloatArray
+    free_neutron_mass_fraction: FloatArray
+    exterior_mass_msun: FloatArray
+    upstream_baryon_number_density_cm3: FloatArray
+    effective_path_length_upstream_cm: FloatArray
+    neutron_on_proton_collision_rate_s1: FloatArray
+    proton_on_neutron_collision_rate_s1: FloatArray
+    proton_gyrofrequency_at_gamma_one_s1: FloatArray
+    shock_beta_upstream_frame: FloatArray
+    shock_beta_downstream_frame: FloatArray
+    hydrodynamic_compression_ratio: FloatArray
 
     def to_hdf5(
         self,
@@ -149,7 +179,7 @@ class NpcInputs:
         """Write a portable HDF5 table with per-dataset units and assumptions."""
         with h5py.File(path, "w") as handle:
             handle.attrs["description"] = "Deterministic inputs for an external NPC Monte Carlo"
-            handle.attrs["schema"] = "jetbns.npc-inputs.v3"
+            handle.attrs["schema"] = "jetbns.npc-inputs.v4"
             handle.attrs["source_equations"] = (
                 "Kashiyama, Murase & Meszaros (2013), equation 7; "
                 "Metzger et al. (2015), free-neutron skin prescription; "
@@ -190,7 +220,14 @@ def metzger_free_neutron_fraction(
     ye = np.asarray(electron_fraction, dtype=float)
     mass = np.asarray(exterior_mass_msun, dtype=float)
     time = np.asarray(time_s, dtype=float)
-    skin = (2.0 / np.pi) * np.arctan(transition_mass_msun / np.maximum(mass, np.finfo(float).tiny))
+    if any(np.any(~np.isfinite(a)) for a in (ye, mass, time)):
+        raise ValueError("composition inputs must be finite")
+    if np.any((ye < 0) | (ye > 1)) or np.any(mass < 0) or np.any(time < 0):
+        raise ValueError("require Ye in [0,1], nonnegative mass and age")
+    if not (np.isfinite(transition_mass_msun) and transition_mass_msun > 0
+            and np.isfinite(decay_time_s) and decay_time_s > 0):
+        raise ValueError("transition mass and decay time must be finite and positive")
+    skin = (2.0 / np.pi) * np.arctan2(transition_mass_msun, mass)
     return np.maximum(0.0, 1.0 - 2.0 * ye) * skin * np.exp(-time / decay_time_s)
 
 
@@ -211,8 +248,8 @@ def evaluate_npc_inputs(
     energy limits.  The original paper's equation 7 is used instead of the
     extra factor of ``c`` accidentally present in the legacy code and notes.
 
-    The breakout sample is excluded by default because the upstream column ends
-    there.  When no breakout occurred, all samples are retained.  A supplied
+    The breakout sample is excluded by default to select the optically thick
+    side of the event; the upstream column is still finite there. A supplied
     observer Lorentz factor may be scalar or broadcastable to the retained
     trajectory; otherwise the jet-head Lorentz factor is used.
     """
@@ -232,21 +269,27 @@ def evaluate_npc_inputs(
         [ejecta.density(float(r), float(t)) for r, t in zip(radius, time, strict=True)],
         dtype=float,
     )
-    if np.any(density <= 0):
+    if np.any(~np.isfinite(density) | (density <= 0)):
         raise ValueError("trajectory must remain inside positive-density ejecta")
     head_gamma = np.asarray(lorentz_factor(head_beta))
     ambient_gamma = np.asarray(lorentz_factor(ambient_beta))
     relative_gamma = relative_lorentz_factor(head_beta, ambient_beta)
     number_density = density * config.target_nucleon_fraction / PROTON_MASS
-    try:
+    has_composition = hasattr(ejecta, "electron_fraction") and not (
+        hasattr(ejecta, "history") and ejecta.history.electron_fraction is None
+    )
+    if has_composition:
         electron_fraction = np.asarray(
             [
                 ejecta.electron_fraction(float(r), float(t))
                 for r, t in zip(radius, time, strict=True)
             ]
         )
-    except (AttributeError, ValueError):
+    else:
         electron_fraction = np.full_like(radius, config.electron_fraction)
+    if np.any(~np.isfinite(electron_fraction) | (electron_fraction < 0)
+              | (electron_fraction > 1)):
+        raise ValueError("ejecta electron fraction must be finite and in [0,1]")
     magnetic_field = (
         config.magnetic_field_at_reference_g * (config.magnetic_reference_radius_cm / radius) ** 2
     )
@@ -265,7 +308,7 @@ def evaluate_npc_inputs(
     optical_depth = number_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
     exterior_mass = np.asarray(
         [
-            ejecta.mass_above(float(r), float(t), samples=128) / SOLAR_MASS
+            ejecta.mass_above(float(r), float(t), samples=config.exterior_mass_samples) / SOLAR_MASS
             for r, t in zip(radius, time, strict=True)
         ]
     )
@@ -276,7 +319,7 @@ def evaluate_npc_inputs(
         transition_mass_msun=config.free_neutron_transition_mass_msun,
         decay_time_s=config.free_neutron_decay_time_s,
     )
-    proton_density = electron_fraction * density / PROTON_MASS
+    proton_density = config.proton_free_fraction * electron_fraction * density / PROTON_MASS
     neutron_density = free_neutron_fraction * density / PROTON_MASS
     neutron_to_proton_depth = (
         proton_density * config.pn_cross_section_cm2 * path_length / ambient_gamma
@@ -311,9 +354,18 @@ def evaluate_npc_inputs(
             raise ValueError(
                 "observer_lorentz_factor is not broadcastable to trajectory"
             ) from error
-        if np.any(observer_gamma < 1):
+        if np.any(~np.isfinite(observer_gamma) | (observer_gamma < 1)):
             raise ValueError("observer_lorentz_factor must be at least one")
     observer_energy = observer_gamma * maximum * PROTON_MASS * SPEED_OF_LIGHT**2
+    # Cold unmagnetized hydrodynamic closure with adiabatic index 4/3.
+    # The jet head is treated as the downstream fluid, not the shock front.
+    compression = 4 * relative_gamma + 3
+    shock_u_squared = (relative_gamma - 1) * ((4 / 3) * relative_gamma + 1)**2 / (
+        2 + (8 / 9) * (relative_gamma - 1)
+    )
+    shock_beta = np.sqrt(shock_u_squared / (1 + shock_u_squared))
+    downstream_four_speed = np.sqrt(shock_u_squared) / compression
+    shock_beta_downstream = downstream_four_speed / np.sqrt(1 + downstream_four_speed**2)
 
     return NpcInputs(
         time,
@@ -340,4 +392,15 @@ def evaluate_npc_inputs(
         maximum,
         observer_gamma,
         observer_energy,
+        electron_fraction,
+        free_neutron_fraction,
+        exterior_mass,
+        density / PROTON_MASS,
+        path_length / ambient_gamma,
+        proton_density * config.pn_cross_section_cm2 * SPEED_OF_LIGHT,
+        neutron_density * config.pn_cross_section_cm2 * SPEED_OF_LIGHT,
+        ELEMENTARY_CHARGE * magnetic_field / (PROTON_MASS * SPEED_OF_LIGHT),
+        shock_beta,
+        shock_beta_downstream,
+        compression,
     )
