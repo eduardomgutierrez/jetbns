@@ -1,5 +1,6 @@
 """Public package interface for jetbns."""
 
+from .cocoon import Cocoon, CocoonPropagationResult, JetCocoon
 from .ejecta import (
     BrokenPowerLaw,
     Ejecta,
@@ -22,11 +23,14 @@ from .propagation import JetHead, PropagationResult
 __all__ = [
     "BrokenPowerLaw",
     "ConstantEngine",
+    "Cocoon",
+    "CocoonPropagationResult",
     "Ejecta",
     "Engine",
     "HomologousPowerLaw",
     "HomologousTail",
     "JetHead",
+    "JetCocoon",
     "NumericalEjecta",
     "NpcConfig",
     "NpcInputs",
