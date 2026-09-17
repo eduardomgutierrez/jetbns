@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from jetbns import ConstantEngine, HomologousPowerLaw, JetHead
+from jetbns import ConstantEngine, HomologousPowerLaw, JetCocoon
 from jetbns.constants import SPEED_OF_LIGHT
 
 
@@ -24,10 +24,11 @@ def main() -> None:
         opening_angle_rad=np.deg2rad(6.8),
         lorentz_factor=10.0,
     )
-    result = JetHead(engine, ejecta).propagate(max_time_s=3.0, time_step_s=2.0e-4)
+    result = JetCocoon(engine, ejecta).propagate(max_time_s=3.0, time_step_s=2.0e-4)
 
     outer_radius = np.array([ejecta.outer_radius(time) for time in result.time_s])
-    figure, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    figure, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+    axes = axes.ravel()
     axes[0].plot(result.time_s, result.radius_cm / 1e9, label="jet head")
     axes[0].plot(result.time_s, outer_radius / 1e9, "--", label="ejecta edge")
     axes[0].set(xlabel="time after merger [s]", ylabel=r"radius [$10^9$ cm]")
@@ -37,6 +38,10 @@ def main() -> None:
     axes[1].axhline(engine.beta, color="black", linestyle=":", label="unshocked jet")
     axes[1].set(xlabel="time after merger [s]", ylabel=r"velocity $v/c$", ylim=(0, 1.05))
     axes[1].legend()
+    axes[2].plot(result.time_s, result.cocoon_energy_erg / 1e48)
+    axes[2].set(xlabel="time after merger [s]", ylabel=r"cocoon energy [$10^{48}$ erg]")
+    axes[3].plot(result.time_s, np.rad2deg(result.jet_opening_angle_rad))
+    axes[3].set(xlabel="time after merger [s]", ylabel="jet opening angle [deg]")
     output = root / "examples" / "output"
     output.mkdir(exist_ok=True)
     figure.savefig(output / "jet_head_propagation.png", dpi=180)
@@ -51,4 +56,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

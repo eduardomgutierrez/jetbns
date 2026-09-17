@@ -2,9 +2,9 @@
 
 `jetbns` is a clean, tested Python implementation of semi-analytic models for
 relativistic jets propagating through binary-neutron-star merger ejecta. It
-currently provides ejecta profiles, one-sided luminosity engines, and an
-uncollimated relativistic jet-head propagator. Cocoon collimation and radiation
-will be added only with reproducible regression tests.
+currently provides ejecta profiles, one-sided luminosity engines, and coupled
+jet--cocoon propagation with pressure collimation through jet-head breakout.
+Detached-cocoon evolution and radiation remain a later layer.
 
 The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
@@ -20,7 +20,7 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-The base package requires NumPy and h5py. Matplotlib is needed for examples.
+The base package requires NumPy 2+ and h5py. Matplotlib is needed for examples.
 
 ## Ejecta models
 
@@ -71,7 +71,7 @@ converts a top-hat isotropic-equivalent luminosity using its opening solid angle
 
 ```python
 import numpy as np
-from jetbns import ConstantEngine, HomologousPowerLaw, JetHead
+from jetbns import ConstantEngine, HomologousPowerLaw, JetCocoon
 
 ejecta = HomologousPowerLaw()
 engine = ConstantEngine.from_isotropic_equivalent(
@@ -79,13 +79,25 @@ engine = ConstantEngine.from_isotropic_equivalent(
     launch_time_s=0.1,
     opening_angle_rad=np.deg2rad(6.8),
 )
-result = JetHead(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
+result = JetCocoon(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
 print(result.broke_out, result.breakout_time_s)
 ```
 
-`JetHead` implements momentum-flux balance for a conical, uncollimated jet and
-includes the ambient ejecta velocity and retarded engine luminosity. The fixed
-integration step is explicit; convergence should be checked by halving it.
+`JetCocoon` evolves head position, cocoon width and deposited energy together.
+Delayed pressure sets the jet cross-section and changes its head speed.
+Breakout occurs when upstream grey optical depth falls to `1/beta_s'`, including
+the retained tail for `NumericalEjecta(cutoff_mode="smooth")`. `JetHead` remains
+the conical comparison. The maximum step is explicit; check convergence by
+halving it. See [equations and legacy correspondence](docs/jet_cocoon.md).
+
+`HomologousTail` provides a subluminal ballistic analytical exponential tail
+whose configured mass includes the tail. Numerical profiles retain all native
+recorded outflow epochs; `history_subsamples` refines them and
+`integration_samples` controls post-simulation extrapolation. Exterior baryon
+mass uses lab-frame mass density. The old sparse-history reconstruction and
+boundary-crossing breakout results are superseded.
+
+NPC-specific examples and data exports live on `project/np-converter`.
 
 ## Examples and tests
 

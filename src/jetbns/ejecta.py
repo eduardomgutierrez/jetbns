@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import cached_property
+from math import gamma
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -31,7 +34,7 @@ def _return_like_input(value: FloatArray, original: ArrayLike) -> float | FloatA
 def lorentz_factor(beta: ArrayLike) -> float | FloatArray:
     """Return the Lorentz factor for a dimensionless velocity ``beta``."""
     beta_array = _array(beta)
-    if np.any(np.abs(beta_array) >= 1):
+    if np.any(~np.isfinite(beta_array)) or np.any(np.abs(beta_array) >= 1):
         raise ValueError("beta must satisfy |beta| < 1")
     result = 1.0 / np.sqrt(1.0 - beta_array**2)
     return _return_like_input(result, beta)
@@ -68,6 +71,27 @@ class Ejecta(ABC):
         integrand = 4.0 * np.pi * radius**2 * self.density(radius, time)
         return float(np.trapezoid(integrand, radius))
 
+    def mass_above(self, radius: float, time: float, *, samples: int = 512) -> float:
+        """Return exterior baryon mass on a lab-time slice in grams.
+
+        Integrate lab-frame mass density, not proper density over lab volume.
+        The angular convention remains isotropic-equivalent.
+        """
+        outer = self.optical_depth_outer_radius(time)
+        if radius >= outer:
+            return 0.0
+        if radius < self.inner_radius(time) or samples < 2:
+            raise ValueError("radius must be inside the ejecta and samples at least two")
+        grid = np.geomspace(radius, outer, samples)
+        integrand = 4.0 * np.pi * grid**2 * self.lab_mass_density(grid, time)
+        return float(np.trapezoid(integrand, grid))
+
+    def lab_mass_density(self, radius: ArrayLike, time: float) -> float | FloatArray:
+        """Return Gamma times proper density on a lab-time slice."""
+        return self.density(radius, time) * lorentz_factor(
+            np.asarray(self.velocity(radius, time)) / SPEED_OF_LIGHT
+        )
+
     def optical_depth(
         self, radius: float, time: float, *, opacity: float = 0.16, samples: int = 2048
     ) -> float:
@@ -76,13 +100,17 @@ class Ejecta(ABC):
         ``opacity`` is in cm^2 g^-1. The default retains the legacy electron-
         scattering value used in the published calculations.
         """
-        outer = self.outer_radius(time)
+        outer = self.optical_depth_outer_radius(time)
         if radius >= outer:
             return 0.0
         if radius < self.inner_radius(time):
             raise ValueError("radius lies below the ejecta inner boundary")
         grid = np.geomspace(radius, outer, samples)
         return float(np.trapezoid(opacity * self.density(grid, time), grid))
+
+    def optical_depth_outer_radius(self, time: float) -> float:
+        """Return the upper boundary used for radial optical-depth integrals."""
+        return self.outer_radius(time)
 
 
 @dataclass(frozen=True)
@@ -129,11 +157,15 @@ class HomologousPowerLaw(Ejecta):
         radius_array = _array(radius)
         outer = self.outer_radius(time)
         n = self.density_index
-        normalization = self.mass_g * (3.0 - n) / (
-            4.0
-            * np.pi
-            * self.inner_radius_cm**n
-            * (outer ** (3.0 - n) - self.inner_radius_cm ** (3.0 - n))
+        normalization = (
+            self.mass_g
+            * (3.0 - n)
+            / (
+                4.0
+                * np.pi
+                * self.inner_radius_cm**n
+                * (outer ** (3.0 - n) - self.inner_radius_cm ** (3.0 - n))
+            )
         )
         density = normalization * (self.inner_radius_cm / radius_array) ** n
         inside = (radius_array >= self.inner_radius_cm) & (radius_array <= outer)
@@ -255,6 +287,81 @@ class BrokenPowerLaw(Ejecta):
 
 
 @dataclass(frozen=True)
+class HomologousTail(Ejecta):
+    """Mass-conserving ballistic broken power law with a subluminal fast tail.
+
+    All surfaces expand as r=beta*c*t, including the inner edge. The specified
+    mass includes the tail and is the integral of Gamma*rho over lab volume.
+    ``density`` returns proper density. This is a controlled analytic scenario,
+    not a fit to a particular numerical simulation.
+    """
+
+    mass_msun: float = 1e-4
+    min_beta: float = 0.02
+    break_beta: float = 0.2
+    nominal_beta: float = 0.4
+    limit_beta: float = 0.9
+    inner_index: float = 2.0
+    outer_index: float = 6.0
+    tail_exponent: float = 8.0
+
+    def __post_init__(self) -> None:
+        if not 0 < self.min_beta < self.break_beta < self.nominal_beta < self.limit_beta < 1:
+            raise ValueError("require 0 < min < break < nominal < limit beta < 1")
+        if not np.isfinite(self.mass_msun) or self.mass_msun <= 0:
+            raise ValueError("mass_msun must be finite and positive")
+        if not self.inner_index < 3 < self.outer_index or self.tail_exponent <= 0:
+            raise ValueError("require inner_index < 3 < outer_index and positive tail_exponent")
+
+    def _scale(self, time: float) -> float:
+        if not np.isfinite(time) or time <= 0:
+            raise ValueError("homologous age must be positive and finite")
+        return time * SPEED_OF_LIGHT
+
+    def inner_radius(self, time: float) -> float:
+        return self.min_beta * self._scale(time)
+
+    def outer_radius(self, time: float) -> float:
+        return self.limit_beta * self._scale(time)
+
+    def nominal_outer_radius(self, time: float) -> float:
+        return self.nominal_beta * self._scale(time)
+
+    def _shape(self, beta: FloatArray) -> FloatArray:
+        core = np.where(beta <= self.break_beta,
+                        (beta / self.break_beta)**-self.inner_index,
+                        (beta / self.break_beta)**-self.outer_index)
+        tail = np.exp(-np.maximum((beta / self.nominal_beta)**self.tail_exponent - 1, 0))
+        return core * tail
+
+    @cached_property
+    def _mass_normalization(self) -> float:
+        beta = np.geomspace(self.min_beta, self.limit_beta, 8192)
+        integral = np.trapezoid(beta**2 * self._shape(beta), beta)
+        return self.mass_msun * SOLAR_MASS / (4 * np.pi * integral)
+
+    def lab_mass_density(self, radius: ArrayLike, time: float) -> float | FloatArray:
+        beta = np.asarray(radius, dtype=float) / self._scale(time)
+        inside = (beta >= self.min_beta) & (beta <= self.limit_beta)
+        safe = np.clip(beta, self.min_beta, self.limit_beta)
+        value = self._mass_normalization * self._shape(safe) / self._scale(time)**3
+        return _return_like_input(np.where(inside, value, 0.0), radius)
+
+    def density(self, radius: ArrayLike, time: float) -> float | FloatArray:
+        beta = np.asarray(radius, dtype=float) / self._scale(time)
+        value = self.lab_mass_density(radius, time) * np.sqrt(np.maximum(1 - beta**2, 0))
+        return _return_like_input(np.asarray(value), radius)
+
+    def velocity(self, radius: ArrayLike, time: float) -> float | FloatArray:
+        beta = np.asarray(radius, dtype=float) / self._scale(time)
+        value = np.where((beta >= self.min_beta) & (beta <= self.limit_beta), beta, 0)
+        return _return_like_input(value * SPEED_OF_LIGHT, radius)
+
+    def mass(self, time: float, *, samples: int = 4096) -> float:
+        return self.mass_above(self.inner_radius(time), time, samples=samples)
+
+
+@dataclass(frozen=True)
 class OutflowHistory:
     """One angular bin of numerical outflow recorded at a fixed radius."""
 
@@ -268,6 +375,8 @@ class OutflowHistory:
         time = _array(self.time_s)
         velocity = _array(self.velocity_c)
         mass_rate = _array(self.mass_loss_rate_g_s)
+        if any(np.any(~np.isfinite(a)) for a in (time, velocity, mass_rate)):
+            raise ValueError("outflow arrays must be finite")
         if time.ndim != 1 or len(time) < 2:
             raise ValueError("outflow arrays must be one-dimensional with at least two samples")
         if velocity.shape != time.shape or mass_rate.shape != time.shape:
@@ -283,7 +392,7 @@ class OutflowHistory:
         electron_fraction = self.electron_fraction
         if electron_fraction is not None:
             ye = _array(electron_fraction)
-            if ye.shape != time.shape or np.any((ye < 0) | (ye > 1)):
+            if ye.shape != time.shape or np.any(~np.isfinite(ye) | (ye < 0) | (ye > 1)):
                 raise ValueError("electron_fraction must match time_s and lie in [0, 1]")
             object.__setattr__(self, "electron_fraction", ye)
         object.__setattr__(self, "time_s", time)
@@ -307,6 +416,7 @@ class OutflowHistory:
         numerical-input format for this project.
         """
         import h5py
+
         with h5py.File(path, "r") as handle:
             group = handle[bin_name]
             time = np.asarray(group["time"], dtype=float)
@@ -329,7 +439,11 @@ class OutflowHistory:
 class NumericalEjecta(Ejecta):
     """Ballistic reconstruction of a numerical outflow time series.
 
-    Each recorded launch epoch contributes a Gaussian distribution in beta.
+    Each recorded launch epoch contributes a generalized-Gaussian distribution
+    in beta. ``cutoff_mode="sharp"`` truncates it at the fastest recorded
+    shell; ``cutoff_mode="smooth"`` retains the exponential-like high-velocity
+    tail. ``outer_radius`` remains the nominal fastest-shell radius; smooth-tail
+    optical-depth integrals extend beyond it when locating shock breakout.
     The local density follows from mass conservation after free expansion. The
     history is isotropic-equivalent by default; a partial angular bin is scaled
     by ``4*pi/solid_angle_sr``.
@@ -338,15 +452,22 @@ class NumericalEjecta(Ejecta):
     history: OutflowHistory
     extraction_radius_cm: float = 4.42e7
     beta_width: float = 0.035
+    kernel_shape: float = 2.0
+    cutoff_mode: Literal["sharp", "smooth"] = "sharp"
     post_simulation_mass_index: float = 5.0 / 3.0
     post_simulation_velocity_index: float = 0.25
     integration_samples: int = 512
+    history_subsamples: int = 1
 
     def __post_init__(self) -> None:
-        if self.extraction_radius_cm <= 0 or self.beta_width <= 0:
-            raise ValueError("extraction_radius_cm and beta_width must be positive")
+        if self.extraction_radius_cm <= 0 or self.beta_width <= 0 or self.kernel_shape <= 0:
+            raise ValueError("extraction_radius_cm, beta_width, and kernel_shape must be positive")
+        if self.cutoff_mode not in ("sharp", "smooth"):
+            raise ValueError("cutoff_mode must be 'sharp' or 'smooth'")
         if self.integration_samples < 16:
             raise ValueError("integration_samples must be at least 16")
+        if self.history_subsamples < 1:
+            raise ValueError("history_subsamples must be at least one")
 
     @classmethod
     def from_hdf5(
@@ -373,6 +494,7 @@ class NumericalEjecta(Ejecta):
         return self.extraction_radius_cm
 
     def outer_radius(self, time: float) -> float:
+        """Return the nominal boundary set by the fastest recorded parcel."""
         if time <= self.history.time_s[0]:
             raise ValueError("time must be later than the first outflow sample")
         launched = self.history.time_s < time
@@ -381,13 +503,33 @@ class NumericalEjecta(Ejecta):
         )
         return float(np.max(radii))
 
+    def optical_depth_outer_radius(self, time: float) -> float:
+        """Include the legacy smooth tail out to three nominal outer radii."""
+        nominal = self.outer_radius(time)
+        return nominal if self.cutoff_mode == "sharp" else 3.0 * nominal
+
     def _launch_grid(self, time: float) -> tuple[FloatArray, FloatArray, FloatArray]:
         upper = min(time * (1.0 - 1e-6), max(time, self.history.time_s[-1]))
         lower = self.history.time_s[0]
         if upper <= lower:
             raise ValueError("time must be later than the first outflow sample")
-        launch_time = np.linspace(lower, upper, self.integration_samples)
         last_time = self.history.time_s[-1]
+        # Preserve EVERY measured epoch: a uniform grid extending to seconds
+        # can miss essentially all of a millisecond-duration simulation.
+        measured = self.history.time_s[self.history.time_s < min(time, last_time)]
+        measured = np.append(measured, min(upper, last_time))
+        if self.history_subsamples > 1:
+            fractions = np.arange(self.history_subsamples) / self.history_subsamples
+            measured = np.append(
+                (measured[:-1, None] + np.diff(measured)[:, None] * fractions).ravel(),
+                measured[-1],
+            )
+        if upper > last_time:
+            # Resolve both recent slow material and the start of extrapolation.
+            flight = np.geomspace(time - upper, time - last_time, self.integration_samples)
+            launch_time = np.unique(np.concatenate((measured, time - flight)))
+        else:
+            launch_time = np.unique(measured)
         mass_rate = np.interp(
             np.minimum(launch_time, last_time),
             self.history.time_s,
@@ -404,69 +546,64 @@ class NumericalEjecta(Ejecta):
         angular_scale = 4.0 * np.pi / self.history.solid_angle_sr
         return launch_time, launch_beta, mass_rate * angular_scale
 
-    def _moments(self, radius: float, time: float) -> tuple[float, float]:
-        if radius < self.extraction_radius_cm or radius > self.outer_radius(time):
-            return 0.0, 0.0
-        launch_time, launch_beta, mass_rate = self._launch_grid(time)
-        flight_time = time - launch_time
-        beta = (radius - self.extraction_radius_cm) / (SPEED_OF_LIGHT * flight_time)
-        valid = (beta > 0) & (beta < 1)
-        kernel = np.exp(-0.5 * ((beta - launch_beta) / self.beta_width) ** 2) / (
-            np.sqrt(2.0 * np.pi) * self.beta_width
-        )
-        gamma_inverse = np.sqrt(np.maximum(1.0 - beta**2, 0.0))
-        weights = np.where(valid, mass_rate * kernel * gamma_inverse / flight_time, 0.0)
-        denominator = float(np.trapezoid(weights, launch_time))
-        numerator = float(np.trapezoid(weights * beta * SPEED_OF_LIGHT, launch_time))
-        return numerator, denominator
-
     def density(self, radius: ArrayLike, time: float) -> float | FloatArray:
-        radius_array = _array(radius)
-        flat = radius_array.reshape(-1)
-        result = np.empty_like(flat)
-        for index, current_radius in enumerate(flat):
-            _, mass_per_time = self._moments(float(current_radius), time)
-            result[index] = mass_per_time / (4.0 * np.pi * current_radius**2 * SPEED_OF_LIGHT)
-        result = result.reshape(radius_array.shape)
-        return _return_like_input(result, radius)
+        return self._profile_moments(radius, time)[0]
 
     def velocity(self, radius: ArrayLike, time: float) -> float | FloatArray:
-        radius_array = _array(radius)
-        flat = radius_array.reshape(-1)
-        result = np.empty_like(flat)
-        for index, current_radius in enumerate(flat):
-            numerator, denominator = self._moments(float(current_radius), time)
-            result[index] = numerator / denominator if denominator > 0 else 0.0
-        result = result.reshape(radius_array.shape)
-        return _return_like_input(result, radius)
+        return self._profile_moments(radius, time)[1]
+
+    def lab_mass_density(self, radius: ArrayLike, time: float) -> float | FloatArray:
+        """Sum the lab-frame baryon density of the ballistic parcels."""
+        return self._profile_moments(radius, time)[3]
+
+    def density_and_velocity(self, radius: float, time: float) -> tuple[float, float]:
+        """Evaluate both quantities using the same quadrature."""
+        density, velocity, _, _ = self._profile_moments(radius, time)
+        return float(density), float(velocity)
 
     def electron_fraction(self, radius: ArrayLike, time: float) -> float | FloatArray:
         """Return a local mass-weighted electron fraction when present."""
         if self.history.electron_fraction is None:
             raise ValueError("the outflow history has no electron-fraction data")
+        return self._profile_moments(radius, time)[2]
+
+    def _profile_moments(self, radius: ArrayLike, time: float) -> tuple:
+        """Integrate consistent proper-density, velocity, Ye, and lab moments."""
         radius_array = _array(radius)
         flat = radius_array.reshape(-1)
-        result = np.zeros_like(flat)
-        for index, current_radius in enumerate(flat):
-            outside = (
-                current_radius < self.extraction_radius_cm
-                or current_radius > self.outer_radius(time)
-            )
-            if outside:
-                continue
-            launch_time, launch_beta, mass_rate = self._launch_grid(time)
-            flight_time = time - launch_time
-            beta = (current_radius - self.extraction_radius_cm) / (SPEED_OF_LIGHT * flight_time)
+        if np.any(~np.isfinite(flat) | (flat <= 0)):
+            raise ValueError("radius must be finite and positive")
+        launch, launch_beta, mass_rate = self._launch_grid(time)
+        flight = time - launch
+        widths = np.diff(launch)
+        quadrature = 0.5 * (np.append(widths, 0) + np.insert(widths, 0, 0))
+        norm = self.kernel_shape / (2 * self.beta_width * gamma(1 / self.kernel_shape))
+        mass_weight = norm * mass_rate * quadrature / flight
+        ye = (
+            np.interp(launch, self.history.time_s, self.history.electron_fraction)
+            if self.history.electron_fraction is not None else np.zeros_like(launch)
+        )
+        outputs = np.zeros((4, flat.size))
+        outer = self.outer_radius(time)
+        for start in range(0, flat.size, 32):
+            current = flat[start:start + 32, None]
+            beta = (current - self.extraction_radius_cm) / (SPEED_OF_LIGHT * flight)
             valid = (beta > 0) & (beta < 1)
-            kernel = np.exp(-0.5 * ((beta - launch_beta) / self.beta_width) ** 2)
-            weights = np.where(valid, mass_rate * kernel / flight_time, 0.0)
-            ye = np.interp(
-                np.minimum(launch_time, self.history.time_s[-1]),
-                self.history.time_s,
-                self.history.electron_fraction,
+            if self.cutoff_mode == "sharp":
+                valid &= current <= outer
+            offsets = np.abs((beta - launch_beta) / self.beta_width)
+            kernel = np.exp(-offsets**self.kernel_shape)
+            lab = np.where(valid, kernel * mass_weight, 0.0)
+            proper = lab * np.sqrt(np.maximum(1 - beta**2, 0))
+            total = proper.sum(axis=1)
+            area = 4 * np.pi * current[:, 0]**2 * SPEED_OF_LIGHT
+            outputs[0, start:start + 32] = total / area
+            outputs[1, start:start + 32] = np.divide(
+                (proper * beta).sum(axis=1) * SPEED_OF_LIGHT,
+                total, out=np.zeros_like(total), where=total > 0,
             )
-            denominator = np.trapezoid(weights, launch_time)
-            if denominator > 0:
-                result[index] = np.trapezoid(weights * ye, launch_time) / denominator
-        result = result.reshape(radius_array.shape)
-        return _return_like_input(result, radius)
+            outputs[2, start:start + 32] = np.divide(
+                (proper * ye).sum(axis=1), total, out=np.zeros_like(total), where=total > 0,
+            )
+            outputs[3, start:start + 32] = lab.sum(axis=1) / area
+        return tuple(_return_like_input(a.reshape(radius_array.shape), radius) for a in outputs)
