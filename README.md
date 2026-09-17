@@ -183,6 +183,7 @@ python examples/plot_propagation.py
 python examples/plot_npc_inputs.py
 python examples/explore_npc_parameter_space.py
 python examples/export_npc_models.py
+python examples/plot_npc_model_comparison.py
 pytest
 ruff check .
 ```
@@ -206,5 +207,11 @@ The gallery command writes ten representative six-panel diagnostics under
 `examples/output/numerical_gallery/`.
 
 Plots are written under `examples/output/`, which is ignored by Git.
+
+After exporting the NPC model suite, `plot_npc_model_comparison.py` overlays
+all models in one panel per Monte Carlo input quantity. It uses elapsed time
+normalized between the first retained state and breakout and writes four PNGs
+plus a multipage PDF under
+`examples/output/npc_model_export/comparison/`.
 
 Use the transfer workflow at the top of this README for new NPC calculations.
