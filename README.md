@@ -2,10 +2,10 @@
 
 `jetbns` is a clean, tested Python implementation of semi-analytic models for
 relativistic jets propagating through binary-neutron-star merger ejecta. It
-currently provides ejecta profiles, one-sided luminosity engines, an
-uncollimated relativistic jet-head propagator, and deterministic inputs for an
-external neutron--proton converter (NPC) Monte Carlo. Cocoon collimation and
-radiation will be added only with reproducible regression tests.
+currently provides ejecta profiles, one-sided luminosity engines, coupled
+jet--cocoon propagation with pressure collimation, and deterministic inputs for
+an external neutron--proton converter (NPC) Monte Carlo. Evolution is followed
+through jet-head breakout; detached-cocoon radiation is a separate future layer.
 
 The physical context is Gutiérrez et al., [*Cocoon shock breakout emission from
 binary neutron star mergers*](https://arxiv.org/abs/2408.15973), Phys. Rev. D
@@ -25,7 +25,8 @@ python examples/export_npc_models.py
 
 This generates **one file to transfer**:
 `examples/output/npc_model_export/npc_monte_carlo_inputs.zip`.
-It contains the HDF5 input table and a LaTeX PDF with equations and definitions.
+It contains the HDF5 input table and a LaTeX PDF with equations, definitions,
+and representative evolution plots.
 PDF generation requires `pdflatex`
 (`texlive-latex-base` on Debian/Ubuntu). Every model is run at two or more
 resolutions before a new archive can be produced.
@@ -111,7 +112,7 @@ converts a top-hat isotropic-equivalent luminosity using its opening solid angle
 
 ```python
 import numpy as np
-from jetbns import ConstantEngine, HomologousPowerLaw, JetHead
+from jetbns import ConstantEngine, HomologousPowerLaw, JetCocoon
 
 ejecta = HomologousPowerLaw()
 engine = ConstantEngine.from_isotropic_equivalent(
@@ -119,7 +120,7 @@ engine = ConstantEngine.from_isotropic_equivalent(
     launch_time_s=0.1,
     opening_angle_rad=np.deg2rad(6.8),
 )
-result = JetHead(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
+result = JetCocoon(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
 print(result.broke_out, result.breakout_time_s)
 ```
 
@@ -127,9 +128,12 @@ Breakout is located where the optical depth ahead of the shock falls to
 `1 / beta_s'`. For smooth numerical ejecta, propagation and the optical-depth
 integral include the retained high-velocity material beyond nominal `r_max`.
 
-`JetHead` implements momentum-flux balance for a conical, uncollimated jet and
-includes the ambient ejecta velocity and retarded engine luminosity. The fixed
-integration step is explicit; convergence should be checked by halving it.
+`JetCocoon` evolves head position, cocoon width and energy together. Delayed
+cocoon pressure changes the jet cross-section and therefore its head speed.
+The returned arrays include `cocoon_energy_erg`, `cocoon_pressure_erg_cm3`, and
+`jet_opening_angle_rad`. `time_step_s` is a maximum step; convergence should be
+checked by halving it. See [equations and legacy correspondence](docs/jet_cocoon.md).
+`JetHead` remains available for an explicitly conical comparison.
 
 ## Neutron--proton converter inputs
 
@@ -165,7 +169,8 @@ et al. (2015), not a reaction-network result. The exported names are explicit:
 equation 7 of Kashiyama, Murase & Meszaros (2013),
 `e B / (sigma_pn m_p c^2 n)`. This corrects an extra factor of `c` in the local
 notes and legacy implementation. Individual NPC tables use schema version 4;
-the multi-model transfer uses `jetbns.npc-model-export.v2`. It also records
+the multi-model transfer uses `jetbns.npc-model-export.v3`. Its `jet_cocoon`
+subgroup records the coupled dynamics on the NPC time grid. It also records
 effective upstream lengths, collision rates, shock speeds in both fluid frames,
 and the cold hydrodynamic compression ratio. Proton densities remain an
 explicit free-proton proxy; bound nuclei require a separate treatment.

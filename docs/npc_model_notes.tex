@@ -22,8 +22,8 @@ Use \field{ana_reference} for a simple first integration check. Each scenario
 is a candidate for a transport calculation; no NPC efficiency is inferred here.
 
 \section*{Data contract}
-The root schema is \field{jetbns.npc-model-export.v2}. Versions predating the
-audit must be regenerated: they can severely underresolve the measured outflow.
+The root schema is \field{jetbns.npc-model-export.v3}. Version 2 used conical
+propagation without cocoon coupling; these new trajectories supersede it.
 The group \field{/models/<name>/} contains 201 time samples of each quantity.
 The last sample is at
 \[
@@ -148,8 +148,11 @@ Each exported model passed a combined resolution comparison: time step
 256 versus 512; numerical extrapolation grid 256 versus 512; and native
 outflow epochs versus native epochs plus midpoints. If needed, all grids are
 refined further by factors of two; the final resolution is recorded per model.
-Endpoint relative changes
-must be below 5 percent. An independent 1536-point opacity integral must satisfy
+The 48-point ellipsoidal cocoon-density average is tested independently against
+192 points.
+Endpoint relative changes must be below 5 percent for breakout and NPC fields,
+and below 10 percent for the auxiliary cocoon energy, width, pressure and jet
+area. Both tolerances are stored per model. An independent 1536-point opacity integral must satisfy
 $|\tau\beta'_s-1|<0.05$. The measured errors are stored under
 \field{convergence}; these check numerical stability, not the physical assumptions.
 
@@ -168,7 +171,10 @@ mass flux is extrapolated as $t^{-5/3}$ and launch velocity as $t^{-1/4}$ after
 the file ends. Kernels are restricted to $0<\beta<1$ without renormalizing the
 lost wings, retaining the existing model convention.
 
-The jet remains conical and uncollimated. Breakout follows the legacy grey
+The jet and cocoon evolve together, including delayed cocoon pressure and
+pressure-driven jet collimation. The subgroup \field{jet_cocoon} gives the
+cocoon width, energy, pressure, lateral speed, and jet area/opening angle on
+the same time grid. Breakout follows the legacy grey
 snapshot criterion $\int\kappa\rho\,dr=1/\beta'_s$, $\kappa=0.16$ cm$^2$ g$^{-1}$.
 This is not moving-medium frequency-dependent radiative transfer. Engine
 duration, power, opening angle, sampling lag, and energy supplied by breakout
@@ -177,6 +183,29 @@ propagation solution. The models are controlled inputs for sensitivity studies;
 an order-unity depth in one channel does not establish a successful NPC cycle.
 
 \includegraphics[width=\linewidth]{npc_prebreakout_overview.png}
+
+\newpage
+\section*{Coupled propagation and example evolution}
+Following equations (10)--(19) of Guti\'errez et al.\ \cite{gutierrez},
+\[
+\dot z_h=\beta_h c,\quad \dot r_c=\beta_{c,\perp}c,\quad
+\dot E_c=\eta L_j(t_{\rm eng})(\beta_j-\beta_h),\quad
+P_c=\frac{E_c(t-\Delta t_c)}{3V_c},
+\]
+\[
+V_c=\frac{2\pi}{3}(z_h-z_0)r_c^2,\quad
+\Delta t_c=\frac{\sqrt{3}(z_h-z_0)}{2c},\quad
+\Sigma_j=\pi\tan^2\theta_0\min[z_h,(z_0+\hat z)/2]^2.
+\]
+The reconfinement height satisfies
+$\hat z=z_0+(\beta_j-\beta_{\rm ej})\sqrt{L_j/(\pi\beta_jcP_c)}$.
+The axial ellipsoidal density average follows the legacy approximation.
+Lateral expansion uses relativistic speed addition. The finite injection
+height is resolved numerically; the exported convergence checks include
+cocoon energy, width, pressure and jet area. These are pre-breakout jet-head
+inputs; the detached cocoon's subsequent shock and radiation are separate.
+
+% EVOLUTION_PLOTS
 \begin{thebibliography}{9}\small
 \bibitem{kashiyama} K. Kashiyama, K. Murase, P. M\'esz\'aros (2013),
 \href{https://arxiv.org/abs/1304.1945}{arXiv:1304.1945}.

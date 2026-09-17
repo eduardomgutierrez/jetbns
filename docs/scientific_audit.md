@@ -4,6 +4,9 @@ This audit supersedes the pre-audit numerical export and its model rankings.
 The package is a deterministic reference setup for transport calculations.
 Numerical convergence is tested separately from the physical assumptions.
 
+The subsequent cocoon port also supersedes the conical v2 transfer. The current
+v3 export uses `JetCocoon`; see [coupled equations and legacy correspondence](jet_cocoon.md).
+
 ## Confirmed problems and changes
 
 1. **Recorded outflow was underresolved.** A uniform grid of 128 epochs from
@@ -42,9 +45,10 @@ Numerical convergence is tested separately from the physical assumptions.
    defect. New regressions check late-time recovery of a short ejection pulse,
    mass conservation, shock-frame transformations, and invalid inputs. Each
    exported model now has refined time/radial/history/mass quadratures and an
-   independent high-resolution breakout residual; 5% is the maximum permitted
-   endpoint discrepancy, not a claim of 5% physical accuracy. SFHo required
-   additional refinement beyond the first comparison.
+   independent high-resolution breakout residual. Breakout and NPC fields use
+   a 5% tolerance; auxiliary cocoon closure fields use 10%. These numerical
+   thresholds are not claims of physical accuracy. SFHo required additional
+   refinement beyond the first comparison.
 
 6. **The old transfer lacked enough context.** The new file records complete
    engine/ejecta/composition settings, profile hashes and measured durations,
@@ -58,9 +62,9 @@ Numerical convergence is tested separately from the physical assumptions.
 
 ## Physics interpretation
 
-The conical momentum-balance propagator implements the appropriate cold-jet
-limit of the propagation paper, but not its cocoon collimation and radiation
-model. Numerical inputs here use recorded `vel`, whereas the paper uses the
+The original audit used the conical momentum-balance propagator. The current
+export evolves cocoon energy, lateral expansion and pressure collimation as
+well, through jet-head breakout. Numerical inputs here use recorded `vel`, whereas the paper uses the
 Bernoulli-derived asymptotic velocity. Reproduction of the paper therefore
 requires a separate comparison with validated input metadata. The new
 quadrature corrects the implementation without claiming that late-time
@@ -125,9 +129,9 @@ a viewing-angle-dependent Doppler transformation.
 ## How to use the result
 
 Use `examples/export_npc_models.py` and share only its final ZIP. The HDF5
-schema is `jetbns.npc-model-export.v2` with `jetbns.npc-inputs.v4` per-model
+schema is `jetbns.npc-model-export.v3` with `jetbns.npc-inputs.v4` per-model
 arrays. The default suite runs without private data. Add `--include-numerical`
 to include measured profiles. The LaTeX report defines the contract; the
-included reader validates it and prints any model's endpoint as JSON. The
+optional repository reader validates it and prints any model's endpoint as JSON. The
 earlier plots and sweeps are historical diagnostic products, not additional
 files needed for the transport setup.

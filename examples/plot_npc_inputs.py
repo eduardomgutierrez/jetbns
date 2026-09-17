@@ -8,7 +8,7 @@ import numpy as np
 from jetbns import (
     ConstantEngine,
     HomologousPowerLaw,
-    JetHead,
+    JetCocoon,
     NpcConfig,
     evaluate_npc_inputs,
 )
@@ -24,7 +24,7 @@ def main() -> None:
         opening_angle_rad=np.deg2rad(6.8),
         lorentz_factor=10.0,
     )
-    trajectory = JetHead(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
+    trajectory = JetCocoon(engine, ejecta).propagate(max_time_s=3, time_step_s=2e-4)
     config = NpcConfig(path_length="radius")
     inputs = evaluate_npc_inputs(trajectory, ejecta, config=config)
 

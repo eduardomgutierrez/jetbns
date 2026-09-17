@@ -33,6 +33,10 @@ def test_export_reader_and_summary_agree_and_detect_corruption(tmp_path):
         for name, value in row.items():
             summary[name] = [value]
     assert reader.validate(path) == [model.name]
+    with h5py.File(path) as handle:
+        group = handle[f"models/{model.name}"]
+        assert group.attrs["propagation_model"] == "JetCocoon"
+        assert set(group["jet_cocoon"]) == set(exporter.COCOON_FIELDS)
     snap = reader.snapshot(path, model.name)
     assert snap["proton_number_density_cm3"] == fine[-1].proton_number_density_cm3[-1]
     assert snap["neutron_on_proton_radial_column_depth"] < snap["neutron_to_proton_optical_depth"]

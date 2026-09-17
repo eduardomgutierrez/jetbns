@@ -101,6 +101,15 @@ def test_initial_height_regularization_converges():
     assert a.cocoon_energy_erg[-1] == pytest.approx(b.cocoon_energy_erg[-1], rel=.005)
 
 
+def test_ellipsoidal_density_quadrature_converges_independently():
+    ejecta = HomologousTail()
+    base = ejecta.inner_radius(1.)*1.01
+    head = .35*C
+    coarse = Cocoon(density_samples=48).mean_density(ejecta, head, base, 1.)
+    fine = Cocoon(density_samples=192).mean_density(ejecta, head, base, 1.)
+    assert coarse == pytest.approx(fine, rel=.005)
+
+
 def test_no_injection_after_engine_switches_off():
     engine = ConstantEngine(launch_time_s=0., duration_s=.01)
     jet = JetCocoon(engine, UniformEjecta(), Cocoon(pressure_delay=False))

@@ -16,9 +16,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from jetbns import (
+    Cocoon,
+    CocoonPropagationResult,
     ConstantEngine,
     HomologousTail,
-    JetHead,
+    JetCocoon,
     NpcConfig,
     NumericalEjecta,
     PropagationResult,
@@ -30,7 +32,13 @@ from jetbns.npc import NPC_UNITS
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "examples/output/npc_model_export"
-SCHEMA = "jetbns.npc-model-export.v2"
+SCHEMA = "jetbns.npc-model-export.v3"
+COCOON_FIELDS = {
+    "cocoon_radius_cm": "cm", "cocoon_energy_erg": "erg",
+    "pressure_energy_erg": "erg", "cocoon_pressure_erg_cm3": "erg cm^-3",
+    "cocoon_lateral_beta": "1", "jet_cross_section_cm2": "cm^2",
+    "jet_opening_angle_rad": "rad", "cocoon_deposition_rate_erg_s": "erg s^-1",
+}
 SUMMARY_FIELDS = (
     "time_s", "radius_cm", "relative_lorentz_factor", "electron_fraction",
     "proton_number_density_cm3", "free_neutron_number_density_cm3",
@@ -41,6 +49,12 @@ CHECK_FIELDS = (
     "upstream_density_g_cm3", "electron_fraction", "relative_lorentz_factor",
     "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth",
 )
+COCOON_CHECK_FIELDS = (
+    "cocoon_energy_erg", "cocoon_radius_cm",
+    "cocoon_pressure_erg_cm3", "jet_cross_section_cm2",
+)
+NPC_CONVERGENCE_TOLERANCE = .05
+COCOON_CONVERGENCE_TOLERANCE = .10
 
 
 @dataclass(frozen=True)
@@ -89,14 +103,25 @@ def build(model: Model, data_root: Path, *, fine: int = 0):
     )
 
 
-def sample_solution(jet: JetHead, trajectory: PropagationResult, count: int = 201):
+def sample_solution(jet: JetCocoon, trajectory: CocoonPropagationResult, count: int = 201):
     """Select a reproducible physical time, independent of the integration step."""
     start = trajectory.time_s[0]
     stop = start + .99*(trajectory.time_s[-1]-start)
     times = np.linspace(start, stop, count)
     radii = np.interp(times, trajectory.time_s, trajectory.radius_cm)
-    states = np.array([jet.state(float(r), float(t)) for r, t in zip(radii, times, strict=True)])
-    return PropagationResult(times, radii, states[:, 0], states[:, 1], states[:, 2], False)
+    width = np.interp(times, trajectory.time_s, trajectory.cocoon_radius_cm)
+    energy = np.interp(times, trajectory.time_s, trajectory.cocoon_energy_erg)
+    pressure_energy = np.interp(
+        times-(radii-trajectory.base_radius_cm)*np.sqrt(3)/(2*SPEED_OF_LIGHT),
+        trajectory.time_s, trajectory.cocoon_energy_erg, left=0.)
+    if not jet.cocoon.pressure_delay:
+        pressure_energy = energy
+    states = [jet.state(float(r), float(t), cocoon_radius_cm=w, cocoon_energy_erg=e,
+                        pressure_energy_erg=p, base_radius_cm=trajectory.base_radius_cm)
+              for r, t, w, e, p in zip(radii, times, width, energy, pressure_energy, strict=True)]
+    return PropagationResult(times, radii, np.array([s.head_beta for s in states]),
+                             np.array([s.ambient_beta for s in states]),
+                             np.array([s.dimensionless_luminosity for s in states]), False)
 
 
 def solve(model: Model, data_root: Path, *, fine: int = 0):
@@ -107,7 +132,11 @@ def solve(model: Model, data_root: Path, *, fine: int = 0):
         launch_radius_cm=launch_radius, opening_angle_rad=np.deg2rad(10),
         lorentz_factor=100, duration_s=60.,
     )
-    jet = JetHead(engine, ejecta, breakout_optical_depth_samples=192*2**fine)
+    # The ellipsoidal density average has its own convergence test. Refining it
+    # inside every trajectory step multiplies the expensive numerical-profile
+    # quadrature without changing the accepted solution at useful precision.
+    jet = JetCocoon(engine, ejecta, cocoon=Cocoon(density_samples=48),
+                    breakout_optical_depth_samples=192*2**fine)
     trajectory = jet.propagate(max_time_s=model.launch_s+60,
                                time_step_s=.01/2**fine)
     if not trajectory.broke_out:
@@ -128,10 +157,17 @@ def audit_model(coarse: tuple, fine: tuple) -> dict:
     errors = {"breakout_time_s": relative_error(coarse[2].breakout_time_s, tr.breakout_time_s)}
     errors.update({name: relative_error(getattr(coarse[4], name)[-1], getattr(npc, name)[-1])
                    for name in CHECK_FIELDS})
+    errors.update({name: relative_error(getattr(coarse[2], name)[-1], getattr(tr, name)[-1])
+                   for name in COCOON_CHECK_FIELDS})
     beta = jet.shock_beta_in_ambient_frame(tr.head_beta[-1], tr.ambient_beta[-1])
     tau = ej.optical_depth(tr.breakout_radius_cm, tr.breakout_time_s, samples=1536)
     errors["breakout_condition"] = abs(tau*beta-1)
-    errors["passed"] = bool(max(errors.values()) < .05)
+    npc_errors = [value for key, value in errors.items() if key not in COCOON_CHECK_FIELDS]
+    cocoon_errors = [errors[key] for key in COCOON_CHECK_FIELDS]
+    errors["passed"] = bool(
+        max(npc_errors) < NPC_CONVERGENCE_TOLERANCE
+        and max(cocoon_errors) < COCOON_CONVERGENCE_TOLERANCE
+    )
     if not errors["passed"]:
         raise RuntimeError(f"resolution check failed: {errors}")
     return errors
@@ -147,6 +183,20 @@ def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: 
     group.attrs["breakout_radius_cm"] = trajectory.breakout_radius_cm
     group.attrs["sample_lag_before_breakout_s"] = trajectory.breakout_time_s-npc.time_s[-1]
     group.attrs["kind"] = model.kind
+    group.attrs["propagation_model"] = "JetCocoon"
+    group.attrs["npc_convergence_tolerance"] = NPC_CONVERGENCE_TOLERANCE
+    group.attrs["cocoon_convergence_tolerance"] = COCOON_CONVERGENCE_TOLERANCE
+    group.attrs["base_radius_cm"] = trajectory.base_radius_cm
+    dynamics = group.create_group("jet_cocoon")
+    for key, unit in COCOON_FIELDS.items():
+        ds = dynamics.create_dataset(key, data=np.interp(
+            npc.time_s, trajectory.time_s, getattr(trajectory, key)), compression="gzip")
+        ds.attrs["unit"] = unit
+        ds.attrs["frame"] = "lab / cocoon closure; see PDF"
+    for key, value in asdict(jet.cocoon).items():
+        dynamics.attrs[key] = value
+    dynamics.attrs["calibration"] = jet.calibration
+    dynamics.attrs["initial_height_fraction"] = jet.initial_height_fraction
     level = int(np.log2(config.exterior_mass_samples/256))
     group.attrs["resolution_level"] = level
     group.attrs["ode_time_step_s"] = .01/2**level
@@ -243,7 +293,7 @@ def field_frame(name: str) -> str:
 
 def plot_model(model, solution, output):
     ej, _, tr, _, npc = solution
-    fig, axes = plt.subplots(2, 3, figsize=(13, 7), constrained_layout=True)
+    fig, axes = plt.subplots(3, 3, figsize=(13, 10), constrained_layout=True)
     for t in np.linspace(tr.time_s[0], tr.time_s[-1], 3):
         r = np.geomspace(ej.inner_radius(t)*1.01, ej.optical_depth_outer_radius(t)*.999, 250)
         rho = ej.density(r, t)
@@ -272,10 +322,19 @@ def plot_model(model, solution, output):
     axes[1, 1].legend(fontsize=8)
     axes[1, 2].plot(remaining, npc.downstream_temperature_kev[near])
     axes[1, 2].set(xlabel="time before breakout [s]", ylabel=r"estimated $kT_d$ [keV]")
+    axes[2, 0].plot(tr.time_s, tr.cocoon_radius_cm/1e10)
+    axes[2, 0].set(xlabel="time [s]", ylabel=r"cocoon width [$10^{10}$ cm]")
+    positive = tr.cocoon_pressure_erg_cm3 > 0
+    axes[2, 1].semilogy(tr.time_s[positive], tr.cocoon_pressure_erg_cm3[positive])
+    axes[2, 1].set(xlabel="time [s]", ylabel=r"cocoon pressure [erg cm$^{-3}$]")
+    axes[2, 2].plot(tr.time_s, np.rad2deg(tr.jet_opening_angle_rad))
+    axes[2, 2].axhline(10., ls="--", color="grey", label="injection angle")
+    axes[2, 2].set(xlabel="time [s]", ylabel="jet opening angle [deg]")
+    axes[2, 2].legend(fontsize=8)
     for ax in axes[1]:
         ax.invert_xaxis()
         ax.grid(alpha=.2)
-    fig.suptitle(model.name + " (reference scenario)")
+    fig.suptitle(model.name + " (coupled jet and cocoon)")
     fig.savefig(output/f"{model.name}.png", dpi=150)
     plt.close(fig)
 
@@ -306,7 +365,14 @@ def write_latex_report(rows, output):
         )+r" \\" for row in rows
     )
     tex = output/"npc_model_notes.tex"
-    tex.write_text(template.read_text().replace("% MODEL_TABLE", table))
+    selected = [rows[0]["name"]]
+    numerical = [r["name"] for r in rows if r["name"] == "num_sfho"]
+    selected += numerical
+    figures = "\n".join(
+        (r"\newpage" if i else "") + r"\includegraphics[width=\linewidth]{plots/"
+        + name + ".png}" for i, name in enumerate(selected))
+    tex.write_text(template.read_text().replace("% MODEL_TABLE", table)
+                   .replace("% EVOLUTION_PLOTS", figures))
     executable = shutil.which("pdflatex")
     if executable is None:
         raise RuntimeError("Install texlive-latex-base (pdflatex) to generate the PDF")
@@ -335,12 +401,12 @@ def main():
             handle.attrs["schema"] = SCHEMA
             handle.attrs["generator_sha256"] = hashlib.sha256(
                 Path(__file__).read_bytes()).hexdigest()
-            for source in ("ejecta", "npc", "propagation", "engines"):
+            for source in ("ejecta", "npc", "propagation", "cocoon", "engines"):
                 handle.attrs[f"{source}_code_sha256"] = hashlib.sha256(
                     (ROOT/f"src/jetbns/{source}.py").read_bytes()).hexdigest()
             handle.attrs["status"] = "resolution-tested scenarios; approximate composition"
             handle.attrs["supersedes"] = (
-                "all pre-audit numerical exports: unresolved launch history"
+                "v1: unresolved launch history; v2: conical propagation without cocoon"
             )
             handle.attrs["optical_depth_definition"] = (
                 "local n sigma r/Gamma_a, not integrated column"
@@ -353,10 +419,10 @@ def main():
                     try:
                         checks = audit_model(coarse, fine)
                         break
-                    except RuntimeError:
+                    except RuntimeError as error:
                         if level == 3:
                             raise
-                        print(f"{model.name}: refining to level {level+1}", flush=True)
+                        print(f"{model.name}: refining to level {level+1}; {error}", flush=True)
                         coarse = fine
                 row = write_model(handle, model, fine, checks, args.data_root)
                 row["name"] = model.name
@@ -386,6 +452,8 @@ def main():
         for path in out.iterdir():
             destination = args.output/path.name
             if path.is_dir():
+                if destination.exists():
+                    shutil.rmtree(destination)
                 shutil.copytree(path, destination, dirs_exist_ok=True)
             else:
                 shutil.copy2(path, destination)

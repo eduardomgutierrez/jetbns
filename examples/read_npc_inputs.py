@@ -8,11 +8,21 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+NPC_CONVERGENCE_FIELDS = (
+    "breakout_time_s", "upstream_density_g_cm3", "electron_fraction",
+    "relative_lorentz_factor", "neutron_to_proton_optical_depth",
+    "proton_to_neutron_optical_depth", "breakout_condition",
+)
+COCOON_CONVERGENCE_FIELDS = (
+    "cocoon_energy_erg", "cocoon_radius_cm",
+    "cocoon_pressure_erg_cm3", "jet_cross_section_cm2",
+)
+
 
 def validate(path: str | Path) -> list[str]:
     """Reject stale schemas, malformed arrays, and inconsistent target depths."""
     with h5py.File(path) as handle:
-        if handle.attrs.get("schema") != "jetbns.npc-model-export.v2":
+        if handle.attrs.get("schema") != "jetbns.npc-model-export.v3":
             raise ValueError("Unsupported/stale export: regenerate with the audited pipeline")
         names = list(handle["models"])
         summary = handle["prebreakout_summary"]
@@ -28,6 +38,20 @@ def validate(path: str | Path) -> list[str]:
                 raise ValueError(f"{name}: sample reaches or exceeds breakout")
             if not g["convergence"].attrs["passed"]:
                 raise ValueError(f"{name}: unresolved numerical solution")
+            convergence = g["convergence"].attrs
+            npc_tolerance = g.attrs["npc_convergence_tolerance"]
+            cocoon_tolerance = g.attrs["cocoon_convergence_tolerance"]
+            if max(convergence[key] for key in NPC_CONVERGENCE_FIELDS) >= npc_tolerance:
+                raise ValueError(f"{name}: NPC convergence tolerance exceeded")
+            if max(convergence[key] for key in COCOON_CONVERGENCE_FIELDS) >= cocoon_tolerance:
+                raise ValueError(f"{name}: cocoon convergence tolerance exceeded")
+            if g.attrs.get("propagation_model") != "JetCocoon":
+                raise ValueError(f"{name}: missing cocoon coupling")
+            for key, ds in g["jet_cocoon"].items():
+                if ds.shape != t.shape or np.any(~np.isfinite(ds[:])) or np.any(ds[:] < 0):
+                    raise ValueError(f"{name}/{key}: invalid cocoon series")
+                if "unit" not in ds.attrs or "frame" not in ds.attrs:
+                    raise ValueError(f"{name}/{key}: missing cocoon unit/frame")
             for key, ds in g["snapshot_columns"].items():
                 if not np.isfinite(ds[()]) or ds[()] < 0:
                     raise ValueError(f"{name}/{key}: invalid radial column")
@@ -73,6 +97,7 @@ def snapshot(path: str | Path, model: str) -> dict[str, float]:
         result = {key: float(ds[-1]) for key, ds in group.items()
                   if isinstance(ds, h5py.Dataset)}
         result.update({key: float(ds[()]) for key, ds in group["snapshot_columns"].items()})
+        result.update({key: float(ds[-1]) for key, ds in group["jet_cocoon"].items()})
         return result
 
 

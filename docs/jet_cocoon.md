@@ -69,10 +69,12 @@ Tests check the closed-form uniform-medium reconfinement solution against
 the legacy pressure-balance equation, the conical zero-pressure limit, the
 ellipsoidal density average, relativistic lateral speed, energy integral,
 causal delay, pressure feedback, initial-height sensitivity, and resolution.
-The export additionally refines the cocoon density quadrature with the head,
-opacity, outflow-history and exterior-mass resolutions. It requires less than
-5% endpoint changes in cocoon width, energy, pressure and jet area, as well as
-the existing NPC quantities.
+The 48-point cocoon density quadrature is tested independently against 192
+points. The export refines the head time step, opacity grid, outflow history,
+extrapolation grid and exterior-mass grid together. Breakout and the exported
+NPC quantities require less than 5% change. Cocoon width, energy, pressure and
+jet area use a 10% diagnostic tolerance because they are auxiliary closure
+variables; both tolerances are stored in every model group.
 
 `CocoonPropagationResult` retains head quantities and adds the cocoon width,
 deposited energy, delayed energy used for pressure, pressure, lateral speed,
