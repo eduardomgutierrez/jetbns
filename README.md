@@ -15,6 +15,27 @@ Start with the audited transfer workflow below. The [scientific audit](docs/scie
 records the corrected reconstruction and the remaining model assumptions.
 Numerical exports made before this audit must be regenerated.
 
+## Interactive notebook
+
+Open [the NPC playground](notebooks/np_converter_playground.ipynb) to edit
+ejecta mass, tail shape, launch delay, jet power, Lorentz factor and opening
+angle. Run a couple of analytical models or select a local numerical profile.
+The notebook shows ejecta, jet/cocoon evolution, all NPC comparison panels,
+and numerical tables. Its dashboard adds models with a Run button and overlays
+their outputs; plots refresh after each solve. Numerical profiles take longer.
+
+```bash
+source .venv/bin/activate
+python -m pip install -e '.[notebooks]'
+jupyter lab notebooks/np_converter_playground.ipynb
+```
+
+Select **Run All Cells** to see the two starting models and reach the interactive
+dashboard. The optional existing-export section previews the saved six-model
+suite without rerunning propagation. Notebook runs use exploratory resolution;
+the audited transfer workflow below performs the convergence checks. Optional
+notebook saves go under `examples/output/` in a new directory each time.
+
 ## NPC transfer workflow
 
 After installation, run the self-contained analytical reference suite:
