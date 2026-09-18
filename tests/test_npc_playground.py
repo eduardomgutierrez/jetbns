@@ -1,6 +1,7 @@
 """Scientific interface checks for the optional notebook helpers."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -79,3 +80,45 @@ def test_playground_numerical_kernel_and_composition_from_hdf5(playground, tmp_p
     assert run.ejecta.kernel_shape == 1
     assert run.ejecta.beta_width == 0.04
     np.testing.assert_allclose(run.npc.electron_fraction, 0.12)
+
+
+def test_dashboard_slider_release_replaces_latest_run(playground, monkeypatch, tmp_path):
+    pytest.importorskip("ipywidgets", reason="requires the notebooks extra")
+    solves = []
+
+    def solve(model, *_args, **_kwargs):
+        solves.append((model, _kwargs))
+        return SimpleNamespace(model=model)
+
+    monkeypatch.setattr(playground, "run_model", solve)
+    monkeypatch.setattr(playground, "summary", lambda _runs: "summary")
+    monkeypatch.setattr(playground, "table", lambda _run: "table")
+    monkeypatch.setattr(playground, "plot_run", lambda _run: playground.plt.figure())
+    monkeypatch.setattr(
+        playground,
+        "plot_comparisons",
+        lambda *_args, **_kwargs: [playground.plt.figure() for _ in range(4)],
+    )
+
+    dashboard = playground.launch_dashboard(tmp_path)
+    controls = dashboard.children[1].children
+    run_button = dashboard.children[3].children[0]
+    run_button.click()
+    assert len(solves) == 1
+
+    mass_slider = controls[1]
+    assert not mass_slider.continuous_update
+    mass_slider.value = 2e-4
+    assert len(solves) == 2
+    assert solves[-1][0].mass_msun == pytest.approx(2e-4)
+
+    preset = dashboard.children[0]
+    preset.value = playground.NUMERICAL[0].name
+    assert len(solves) == 3
+    assert solves[-1][0].kind == "numerical"
+
+    width_slider = controls[9]
+    assert not width_slider.continuous_update
+    width_slider.value = 0.08
+    assert len(solves) == 4
+    assert solves[-1][1]["beta_width"] == pytest.approx(0.08)

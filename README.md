@@ -222,6 +222,21 @@ python examples/explore_npc_numerical.py path/to/lagrangian_profile.h5
 python examples/plot_numerical_parameter_gallery.py path/to/lagrangian_profile.h5
 ```
 
+To reproduce the analytical benchmark in Appendix A.1 of Salafia et al.
+(A&A 636, A105, 2020), run:
+
+```bash
+python examples/compare_aanda2020_models.py
+```
+
+This evaluates all G18 and N14 configurations listed in the appendix with the
+coupled `JetCocoon` solver, prints the published and calculated breakout
+quantities, and writes `examples/output/aanda2020/table_a1_comparison.tsv` and
+`table_a1_comparison.png`. The script uses the paper's one-sided `L_j` and a
+finite-inner-radius broken power-law approximation to its `r^-3.5` ambient
+profile; see the script docstring for the interpretation of differences from
+the published simulation values.
+
 This writes `npc_numerical_sweep.png` and `npc_numerical_sweep.h5` under
 `examples/output/`. Numerical data are not bundled with the repository.
 The gallery command writes ten representative six-panel diagnostics under

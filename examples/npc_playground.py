@@ -307,7 +307,14 @@ def save_run(run: Run, output_dir: Path) -> list[Path]:
 
 
 def launch_dashboard(data_root: Path):
-    """Widget controls; a deliberate Run click solves once and refreshes outputs."""
+    """Widget controls that solve and refresh after a slider is released.
+
+    Auto-update replaces the latest run so parameter exploration does not fill
+    the comparison tabs with every intermediate trial.  The explicit button
+    retains the latest run and adds a newly named model for comparisons.
+    """
+    from time import perf_counter
+
     import ipywidgets as widgets
     from IPython.display import FileLink, clear_output, display
 
@@ -315,48 +322,94 @@ def launch_dashboard(data_root: Path):
     preset = widgets.Dropdown(options=list(presets), description="Preset")
     controls = {
         "name": widgets.Text(value="trial_1", description="Name"),
-        "mass": widgets.FloatLogSlider(value=1e-4, min=-6, max=-1, description="Mass [Msun]"),
-        "power": widgets.FloatLogSlider(value=1e51, min=48, max=53, description="L_iso [erg/s]"),
-        "launch": widgets.FloatSlider(value=1.0, min=0.1, max=10.0, description="Launch [s]"),
-        "tail": widgets.FloatSlider(value=8.0, min=2.0, max=24.0, description="Tail exponent"),
-        "ye": widgets.FloatSlider(
-            value=0.3, min=0.0, max=0.5, step=0.01, description="Ye fallback"
+        "mass": widgets.FloatLogSlider(
+            value=1e-4, min=-6, max=-1, description="Mass [Msun]", continuous_update=False
         ),
-        "gamma": widgets.FloatSlider(value=100.0, min=2.0, max=200.0, description="Jet Gamma"),
-        "theta": widgets.FloatSlider(value=10.0, min=1.0, max=30.0, description="Angle [deg]"),
+        "power": widgets.FloatLogSlider(
+            value=1e51, min=48, max=53, description="L_iso [erg/s]", continuous_update=False
+        ),
+        "launch": widgets.FloatSlider(
+            value=1.0, min=0.1, max=10.0, description="Launch [s]", continuous_update=False
+        ),
+        "tail": widgets.FloatSlider(
+            value=8.0,
+            min=2.0,
+            max=24.0,
+            description="Tail exponent",
+            continuous_update=False,
+        ),
+        "ye": widgets.FloatSlider(
+            value=0.3,
+            min=0.0,
+            max=0.5,
+            step=0.01,
+            description="Ye fallback",
+            continuous_update=False,
+        ),
+        "gamma": widgets.FloatSlider(
+            value=100.0,
+            min=2.0,
+            max=200.0,
+            description="Jet Gamma",
+            continuous_update=False,
+        ),
+        "theta": widgets.FloatSlider(
+            value=10.0,
+            min=1.0,
+            max=30.0,
+            description="Angle [deg]",
+            continuous_update=False,
+        ),
         "kernel": widgets.Dropdown(
             options=[("Gaussian", 2.0), ("Exponential", 1.0)], description="Kernel"
         ),
         "width": widgets.FloatSlider(
-            value=0.05, min=0.01, max=0.1, step=0.005, description="Beta width"
+            value=0.05,
+            min=0.01,
+            max=0.1,
+            step=0.005,
+            description="Beta width",
+            continuous_update=False,
         ),
         "cutoff": widgets.Dropdown(options=["smooth", "sharp"], description="Cutoff"),
         "dt": widgets.FloatText(value=0.01, description="Max dt [s]"),
         "horizon": widgets.FloatText(value=15.0, description="Horizon [s]"),
     }
     near = widgets.Checkbox(value=False, description="Final 20% only")
+    auto_update = widgets.Checkbox(value=True, description="Update after slider release")
     run_button = widgets.Button(description="Run and add model", button_style="primary")
     clear_button = widgets.Button(description="Clear comparisons")
     save_button = widgets.Button(description="Save latest run")
+    activity = widgets.HTML(
+        value="<b>Ready.</b> Numerical models can take about 20 seconds per update."
+    )
     status = widgets.Output()
     output = widgets.Output()
     runs: list[Run] = []
+    choosing_preset = False
 
     def choose(change):
+        nonlocal choosing_preset
+        choosing_preset = True
         model = presets[change["new"]]
-        for key, value in (
-            ("mass", model.mass_msun),
-            ("power", model.luminosity_iso_erg_s),
-            ("launch", model.launch_s),
-            ("tail", model.tail_exponent),
-            ("ye", model.electron_fraction),
-        ):
-            controls[key].value = value
-        controls["name"].value = model.name + "_trial"
-        for key in ("mass", "tail", "ye"):
-            controls[key].disabled = model.kind == "numerical"
-        for key in ("kernel", "width", "cutoff"):
-            controls[key].disabled = model.kind != "numerical"
+        try:
+            for key, value in (
+                ("mass", model.mass_msun),
+                ("power", model.luminosity_iso_erg_s),
+                ("launch", model.launch_s),
+                ("tail", model.tail_exponent),
+                ("ye", model.electron_fraction),
+            ):
+                controls[key].value = value
+            controls["name"].value = model.name + "_trial"
+            for key in ("mass", "tail", "ye"):
+                controls[key].disabled = model.kind == "numerical"
+            for key in ("kernel", "width", "cutoff"):
+                controls[key].disabled = model.kind != "numerical"
+        finally:
+            choosing_preset = False
+        if runs and auto_update.value:
+            execute(None, replace_latest=True)
 
     def refresh(*_):
         with output:
@@ -392,8 +445,15 @@ def launch_dashboard(data_root: Path):
             with boxes[-1]:
                 display(table(runs[-1]))
 
-    def execute(_):
+    def execute(_, *, replace_latest: bool = False):
         run_button.disabled = True
+        original_button_description = run_button.description
+        run_button.description = "Solving..."
+        started = perf_counter()
+        activity.value = (
+            "<b>Solving jet + cocoon…</b> The existing plots remain visible until "
+            "the new numerical result is complete."
+        )
         with status:
             clear_output()
             print(
@@ -411,7 +471,7 @@ def launch_dashboard(data_root: Path):
                     tail_exponent=controls["tail"].value,
                     electron_fraction=controls["ye"].value,
                 )
-                if any(run.model.name == model.name for run in runs):
+                if not replace_latest and any(run.model.name == model.name for run in runs):
                     raise ValueError("Use a different name for each comparison model")
                 result = run_model(
                     model,
@@ -424,17 +484,32 @@ def launch_dashboard(data_root: Path):
                     beta_width=controls["width"].value,
                     cutoff_mode=controls["cutoff"].value,
                 )
-                runs.append(result)
+                if replace_latest and runs:
+                    runs[-1] = result
+                else:
+                    runs.append(result)
                 refresh()
+                elapsed = perf_counter() - started
+                activity.value = f"<b>Updated plots in {elapsed:.1f} s.</b>"
                 print("Finished. Exploratory resolution; inspect the breakout flag above.")
             except Exception as error:
+                activity.value = "<b>Update failed.</b> See the message below."
                 print(f"{type(error).__name__}: {error}")
+                if runs:
+                    print("Plots still show the previous successful run.")
             finally:
                 run_button.disabled = False
+                run_button.description = original_button_description
+
+    def update_from_control(_):
+        if choosing_preset or not auto_update.value or not runs:
+            return
+        execute(None, replace_latest=True)
 
     def clear(_):
         runs.clear()
         refresh()
+        activity.value = "<b>Ready.</b> Run a model to create the first plot."
 
     def save(_):
         from datetime import datetime, timezone
@@ -450,6 +525,9 @@ def launch_dashboard(data_root: Path):
 
     preset.observe(choose, names="value")
     choose({"new": preset.value})
+    for key, control in controls.items():
+        if key != "name":
+            control.observe(update_from_control, names="value")
     near.observe(refresh, names="value")
     run_button.on_click(execute)
     clear_button.on_click(clear)
@@ -461,8 +539,9 @@ def launch_dashboard(data_root: Path):
                 list(controls.values()),
                 layout=widgets.Layout(grid_template_columns="repeat(2, 1fr)"),
             ),
-            near,
+            widgets.HBox([auto_update, near]),
             widgets.HBox([run_button, clear_button, save_button]),
+            activity,
             status,
             output,
         ]
