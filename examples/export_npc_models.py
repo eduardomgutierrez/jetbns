@@ -357,22 +357,10 @@ def plot_overview(rows, output):
 
 def write_latex_report(rows, output):
     template = ROOT/"docs/npc_model_notes.tex"
-    table = "\n".join(
-        r"\texttt{"+row["name"].replace("_", r"\_")+"} & " + " & ".join(
-            f"{row[k]:.3g}" for k in ("relative_lorentz_factor", "electron_fraction",
-                "proton_number_density_cm3", "free_neutron_number_density_cm3",
-                "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth")
-        )+r" \\" for row in rows
-    )
     tex = output/"npc_model_notes.tex"
-    selected = [rows[0]["name"]]
-    numerical = [r["name"] for r in rows if r["name"] == "num_sfho"]
-    selected += numerical
-    figures = "\n".join(
-        (r"\newpage" if i else "") + r"\includegraphics[width=\linewidth]{plots/"
-        + name + ".png}" for i, name in enumerate(selected))
-    tex.write_text(template.read_text().replace("% MODEL_TABLE", table)
-                   .replace("% EVOLUTION_PLOTS", figures))
+    # Keep the handoff note short and independent of generated plots.  The
+    # HDF5 file remains the authoritative source for model endpoints.
+    tex.write_text(template.read_text())
     executable = shutil.which("pdflatex")
     if executable is None:
         raise RuntimeError("Install texlive-latex-base (pdflatex) to generate the PDF")
