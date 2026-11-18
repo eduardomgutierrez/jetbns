@@ -60,6 +60,37 @@ v3 export uses `JetCocoon`; see [coupled equations and legacy correspondence](je
 7. **Published dependency bounds were too loose.** `numpy.trapezoid` requires
    NumPy 2.0; the declared minimum was 1.24. The minimum is corrected.
 
+8. **The collimated-to-conical switch was discontinuous (2026-11-18).**
+   `JetCocoon.cross_section` bisected the reconfinement residual
+   `z-z_0-max(beta_j-beta_a(z/cos theta_0),0)*sqrt(L_j/(pi beta_j c P_c))` on
+   `[z_0, 2 z_h - z_0]` and declared the jet conical when the residual was not
+   positive at the upper end. Once the head passes half the extent of the
+   ejecta that end lies where the ejecta velocity is returned as zero, so the
+   test failed while the physical root inside the material still existed: the
+   area jumped by a factor 5-7 (head Lorentz factor 0.66 between adjacent
+   steps in the WP4 numerical variants). The root is now searched on
+   `[z_0, z_h]` when the residual is positive at the head, otherwise between the
+   head and the smaller of `2 z_h - z_0` and the last height with a nonzero
+   ambient velocity; the jet is conical only if no root exists there. Bisection
+   uses 48 steps. Regressions check continuity across the old switch (HomologousTail,
+   head at 0.6 of the outer radius, area steps < 1% for pressure steps of 1%,
+   against a jump of 4.4 with the old bracket), agreement with an independent
+   scan of the residual, equality with the old bracket where it was correct,
+   and the conical limit. The analytic export is unchanged to `2e-9` (bisection
+   precision of the old 28-step search).
+
+9. **Mass launched just after the record was overestimated (2026-11-18).**
+   For queries later than the record, `NumericalEjecta._launch_grid` was
+   geometric in flight time, so its first interval after the record spanned
+   `~ln(1e6)/N` of the age, much longer than the record, while the continued
+   mass-loss rate falls as `(t/t_last)^(-5/3)`. The trapezoid overestimated the
+   launched mass by a factor growing with time (1.92 at 8 s for a synthetic
+   record ending at 0.03 s with N=512; 3.12 with N=256). The grid now also
+   contains N launch epochs geometric in `t-t_last` from `1e-6 t_last` to the
+   newest launch. Enclosed mass agrees with the analytic launched mass to
+   `4e-4` at 1-8 s for N=256 and 512. The analytic models do not use this
+   class.
+
 ## Physics interpretation
 
 The original audit used the conical momentum-balance propagator. The current

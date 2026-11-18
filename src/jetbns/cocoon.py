@@ -135,22 +135,43 @@ class JetCocoon:
             return float(np.pi*(radius*np.tan(angle))**2)
         scale = np.sqrt(luminosity/(np.pi*self.engine.beta*C*pressure))
 
-        def residual(height: float) -> float:
-            beta = float(self.ejecta.velocity(height/np.cos(angle), time))/C
-            return height-base-max(self.engine.beta-beta, 0)*scale
+        def ambient(height: float) -> float:
+            return float(self.ejecta.velocity(height/np.cos(angle), time))/C
 
-        # Only roots with (z_hat+z_0)/2 < z_h can collimate this head.
-        lower, upper = base, 2*radius-base
-        if residual(upper) <= 0:
-            collimation_height = radius
-        else:
-            for _ in range(28):
+        def residual(height: float) -> float:
+            return height-base-max(self.engine.beta-ambient(height), 0)*scale
+
+        def bisect(lower: float, upper: float) -> float:
+            for _ in range(48):
                 middle = (lower+upper)/2
                 if residual(middle) > 0:
                     upper = middle
                 else:
                     lower = middle
-            collimation_height = .5*(base+.5*(lower+upper))
+            return .5*(lower+upper)
+
+        # The residual rises with height wherever the ambient speed is defined.
+        # Only roots with (z_hat+z_0)/2 < z_h can collimate this head; search
+        # below the head first, then up to 2 z_h - z_0 but never beyond the
+        # last height with an ambient velocity (outside the ejecta it is
+        # returned as zero and would hide a root inside the material).
+        if residual(radius) > 0:
+            root = bisect(base, radius)
+        else:
+            upper = 2*radius-base
+            if ambient(upper) <= 0:
+                inside, outside = radius, upper
+                for _ in range(48):
+                    middle = (inside+outside)/2
+                    if ambient(middle) > 0:
+                        inside = middle
+                    else:
+                        outside = middle
+                upper = inside
+            if residual(upper) <= 0:
+                return float(np.pi*(radius*np.tan(angle))**2)
+            root = bisect(radius, upper)
+        collimation_height = min(.5*(base+root), radius)
         return float(np.pi*(collimation_height*np.tan(angle))**2)
 
     def state(self, radius: float, time: float, *, cocoon_radius_cm: float,
