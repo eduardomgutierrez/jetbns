@@ -370,6 +370,8 @@ class OutflowHistory:
     mass_loss_rate_g_s: FloatArray
     electron_fraction: FloatArray | None = None
     solid_angle_sr: float = 4.0 * np.pi
+    velocity_source: str = "recorded"
+    dropped_samples: int = 0
 
     def __post_init__(self) -> None:
         time = _array(self.time_s)
@@ -407,32 +409,84 @@ class OutflowHistory:
         bin_name: str,
         extraction_radius_cm: float,
         solid_angle_sr: float = 4.0 * np.pi,
+        velocity: Literal["recorded", "asymptotic"] = "recorded",
+        velocity_floor: float = 1.0e-12,
+        drop_non_increasing: bool = True,
     ) -> OutflowHistory:
         """Load one angular bin from a WhiskyTHC-style HDF5 file.
 
         The file stores local density and velocity rather than angular-bin mass
         flux. The latter is reconstructed as ``rho Gamma v r^2 solid_angle``
-        at the supplied extraction radius. HDF5 is the standard persisted
-        numerical-input format for this project.
+        at the supplied extraction radius, always from the recorded ``vel``.
+        HDF5 is the standard persisted numerical-input format for this project.
+
+        ``velocity`` selects the launch speed of each epoch: ``"recorded"``
+        uses ``vel``; ``"asymptotic"`` uses the ``bernoulli`` dataset, read as
+        ``(Gamma_inf - 1) c^2`` in cm^2 s^-2, so that with ``x = bernoulli/c^2``
+        ``beta_inf = sqrt(x (2 + x)) / (1 + x)``. Asymptotic speeds below
+        ``velocity_floor`` (including non-positive or non-finite ``x``) are set
+        to ``velocity_floor``. With ``drop_non_increasing`` samples whose time
+        does not exceed the previous kept time are dropped and counted in
+        ``dropped_samples``.
         """
         import h5py
 
+        if velocity not in ("recorded", "asymptotic"):
+            raise ValueError("velocity must be 'recorded' or 'asymptotic'")
+        if not 0 < velocity_floor < 1:
+            raise ValueError("velocity_floor must lie strictly between 0 and 1")
         with h5py.File(path, "r") as handle:
             group = handle[bin_name]
-            time = np.asarray(group["time"], dtype=float)
-            velocity = np.asarray(group["vel"], dtype=float) / SPEED_OF_LIGHT
-            density = np.asarray(group["rho"], dtype=float)
-            gamma = _array(lorentz_factor(velocity))
-            mass_rate = (
-                density
-                * gamma
-                * velocity
-                * SPEED_OF_LIGHT
-                * extraction_radius_cm**2
-                * solid_angle_sr
-            )
-            ye = np.asarray(group["ye"], dtype=float) if "ye" in group else None
-        return cls(time, velocity, mass_rate, ye, solid_angle_sr)
+            if velocity == "asymptotic" and "bernoulli" not in group:
+                raise ValueError(
+                    f"{path}: bin {bin_name!r} has no 'bernoulli' dataset; "
+                    "velocity='asymptotic' needs it"
+                )
+            data = {
+                "time": np.asarray(group["time"], dtype=float),
+                "vel": np.asarray(group["vel"], dtype=float),
+                "rho": np.asarray(group["rho"], dtype=float),
+            }
+            if "ye" in group:
+                data["ye"] = np.asarray(group["ye"], dtype=float)
+            if velocity == "asymptotic":
+                data["bernoulli"] = np.asarray(group["bernoulli"], dtype=float)
+        shapes = {key: value.shape for key, value in data.items()}
+        if len(set(shapes.values())) != 1:
+            raise ValueError(f"{path}: bin {bin_name!r} datasets differ in shape {shapes}")
+        dropped = 0
+        if drop_non_increasing and data["time"].size > 1:
+            time_raw = data["time"]
+            keep = np.ones(time_raw.size, dtype=bool)
+            keep[1:] = time_raw[1:] > np.maximum.accumulate(time_raw)[:-1]
+            dropped = int(np.count_nonzero(~keep))
+            data = {key: value[keep] for key, value in data.items()}
+        recorded = data["vel"] / SPEED_OF_LIGHT
+        gamma = _array(lorentz_factor(recorded))
+        mass_rate = (
+            data["rho"]
+            * gamma
+            * recorded
+            * SPEED_OF_LIGHT
+            * extraction_radius_cm**2
+            * solid_angle_sr
+        )
+        if velocity == "recorded":
+            launch = recorded
+        else:
+            x = data["bernoulli"] / SPEED_OF_LIGHT**2
+            with np.errstate(invalid="ignore", divide="ignore"):
+                beta = np.sqrt(x * (2.0 + x)) / (1.0 + x)
+            launch = np.where(np.isfinite(x) & (x > 0) & (beta >= velocity_floor), beta, velocity_floor)
+        return cls(
+            data["time"],
+            launch,
+            mass_rate,
+            data.get("ye"),
+            solid_angle_sr,
+            velocity_source=velocity,
+            dropped_samples=dropped,
+        )
 
 
 @dataclass(frozen=True)
@@ -477,14 +531,24 @@ class NumericalEjecta(Ejecta):
         bin_name: str = "itheta=00000",
         extraction_radius_cm: float = 4.42e7,
         solid_angle_sr: float = 4.0 * np.pi,
+        velocity: Literal["recorded", "asymptotic"] = "recorded",
+        velocity_floor: float = 1.0e-12,
+        drop_non_increasing: bool = True,
         **kwargs: float,
     ) -> NumericalEjecta:
-        """Construct a numerical ejecta model directly from an HDF5 bin."""
+        """Construct a numerical ejecta model directly from an HDF5 bin.
+
+        ``velocity``, ``velocity_floor`` and ``drop_non_increasing`` are passed
+        to :meth:`OutflowHistory.from_hdf5`.
+        """
         history = OutflowHistory.from_hdf5(
             path,
             bin_name=bin_name,
             extraction_radius_cm=extraction_radius_cm,
             solid_angle_sr=solid_angle_sr,
+            velocity=velocity,
+            velocity_floor=velocity_floor,
+            drop_non_increasing=drop_non_increasing,
         )
         return cls(history, extraction_radius_cm=extraction_radius_cm, **kwargs)
 

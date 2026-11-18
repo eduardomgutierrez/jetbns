@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 import h5py
@@ -67,6 +67,9 @@ class Model:
     electron_fraction: float = .3
     tail_exponent: float = 8.0
     profile: str = ""
+    velocity: str = "recorded"
+    continuation: tuple[float, float] = (5/3, 1/4)
+    beta_width: float = .05
 
 
 ANALYTICAL = (
@@ -86,6 +89,17 @@ NUMERICAL = (
           profile="jet_propagation/jet_propagation/profile_files/new/"
                   "SLy_M145-125_M1_SR_v2/outflow_1_ber_hmin_out/lagrangian_profile.h5"),
 )
+# Gutierrez et al. 2025 settings for the same three profiles: Bernoulli asymptotic launch speed,
+# kernel width beta_width = 0.035 (sigma = 0.025 c) and per-history continuation indices
+# (post_simulation_mass_index, post_simulation_velocity_index). The indices are the late-time
+# slopes (t > 0.3 s) of the paper-era extended files DD2_M135-135_M1_K2_SR.h5,
+# SFHo_M135-135_M1_SR.h5 and SLy_M145-125_M1_SR_v2.h5, measured 2026-11-05 (np-converter audit,
+# reduced/v3-six-models/audit/ejecta_variants.json).
+NUMERICAL_2025 = tuple(
+    replace(model, name=f"{model.name}_2025", velocity="asymptotic", beta_width=.035,
+            continuation=continuation)
+    for model, continuation in zip(NUMERICAL, ((1.50, 0.13), (7.16, 5.23), (9.52, 6.91)))
+)
 
 
 def build(model: Model, data_root: Path, *, fine: int = 0):
@@ -98,7 +112,10 @@ def build(model: Model, data_root: Path, *, fine: int = 0):
         angle = 2*np.pi*(np.cos(theta[0]-spacing/2)-np.cos(theta[0]+spacing/2))
     return NumericalEjecta.from_hdf5(
         path, bin_name="itheta=00000", extraction_radius_cm=4.42e7,
-        solid_angle_sr=float(angle), cutoff_mode="smooth", kernel_shape=2., beta_width=.05,
+        solid_angle_sr=float(angle), velocity=model.velocity, cutoff_mode="smooth",
+        kernel_shape=2., beta_width=model.beta_width,
+        post_simulation_mass_index=model.continuation[0],
+        post_simulation_velocity_index=model.continuation[1],
         integration_samples=256*2**fine, history_subsamples=2**fine,
     )
 
@@ -225,6 +242,10 @@ def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: 
                 "mass_msun", "tail_exponent",
             ):
                 continue
+            if label == "model_parameters" and model.kind == "analytical" and key in (
+                "velocity", "continuation", "beta_width",
+            ):
+                continue
             settings.attrs[key] = value
     if model.kind == "numerical":
         settings = group.create_group("numerical_profile")
@@ -232,7 +253,11 @@ def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: 
                     "integration_samples", "history_subsamples", "post_simulation_mass_index",
                     "post_simulation_velocity_index"):
             settings.attrs[key] = getattr(ejecta, key)
-        settings.attrs["velocity_source"] = "recorded vel; NOT Bernoulli asymptotic velocity"
+        settings.attrs["velocity_source"] = (
+            "recorded vel; NOT Bernoulli asymptotic velocity"
+            if ejecta.history.velocity_source == "recorded" else
+            "Bernoulli asymptotic velocity; mass-loss rate from recorded vel")
+        settings.attrs["dropped_non_increasing_samples"] = ejecta.history.dropped_samples
         settings.attrs["source_sha256"] = hashlib.sha256(
             (data_root/model.profile).read_bytes()).hexdigest()
         settings.attrs["recorded_time_start_s"] = ejecta.history.time_s[0]
@@ -374,10 +399,16 @@ def write_latex_report(rows, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--include-numerical", action="store_true")
+    parser.add_argument("--ejecta-2025", action="store_true",
+                        help="with --include-numerical, use NUMERICAL_2025 (Gutierrez et al. 2025 "
+                             "ejecta settings) instead of NUMERICAL")
     parser.add_argument("--data-root", type=Path, default=ROOT.parent)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args()
-    models = ANALYTICAL + NUMERICAL if args.include_numerical else ANALYTICAL
+    if args.ejecta_2025 and not args.include_numerical:
+        parser.error("--ejecta-2025 requires --include-numerical")
+    numerical = NUMERICAL_2025 if args.ejecta_2025 else NUMERICAL
+    models = ANALYTICAL + numerical if args.include_numerical else ANALYTICAL
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="npc-build-", dir=args.output) as temp:
         out = Path(temp)
