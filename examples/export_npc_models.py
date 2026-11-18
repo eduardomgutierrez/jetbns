@@ -28,11 +28,57 @@ from jetbns import (
     metzger_free_neutron_fraction,
 )
 from jetbns.constants import PROTON_MASS, SOLAR_MASS, SPEED_OF_LIGHT
-from jetbns.npc import NPC_UNITS
+from jetbns.npc import GREY_OPACITY_CM2_G, NPC_UNITS
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "examples/output/npc_model_export"
-SCHEMA = "jetbns.npc-model-export.v3"
+SCHEMA = "jetbns.npc-model-export.v4"
+NPC_SCHEMA = "jetbns.npc-inputs.v5"
+UNIFORM_SAMPLES = 201
+UNIFORM_FRACTION = .99  # last uniform sample: fraction of the propagation t_bo - t_0
+GEOMETRIC_SAMPLES = 60
+GEOMETRIC_REMAINING = (.3, 1e-4)  # (t_bo - t)/(t_bo - t_0), first and last geometric sample
+SAMPLING = ("201 uniform to 0.99 plus 60 geometric in (t_bo - t)/(t_bo - t_0) "
+            "from 0.3 to 1e-4")
+PAIR_REGULATED_TEMPERATURE_KEV = (100., 200.)
+RADIATION_STATE_NOTE = (
+    "The jet-head shock in merger ejecta is photon-starved (upstream photons per baryon << "
+    "threshold); the immediate downstream is expected at 100-200 keV with pair loading; the "
+    "thermalised temperature is a lower limit. np-converter decision 2026-11-18.")
+FIELD_FRAMES = {
+    "exterior_pn_column_lightcone": "light cone of an outgoing particle; all baryons as targets",
+    "exterior_pn_column_static": "frozen lab-time radial profile; all baryons as targets",
+    "exterior_grey_optical_depth": "frozen lab-time radial profile",
+    "lightcone_exit_radius_cm": "lab",
+    "lightcone_exited": "light cone of an outgoing particle",
+    "downstream_temperature_thermalised_kev": "downstream fluid rest",
+    "photon_rich_threshold_photons_per_baryon": "upstream fluid rest",
+    "pair_loading_estimate": "immediate downstream (pairs per baryon)",
+}
+FIELD_ROLES = {
+    "exterior_pn_column_lightcone": (
+        "primary conversion depth (np-converter decision 2026-11-18); for a steady wind "
+        "equals n_u sigma_pn r/(2 Gamma_a)"),
+    "exterior_pn_column_static": "frozen-slice diagnostic",
+    "exterior_grey_optical_depth": "breakout criterion depth, kappa = 0.16",
+    "lightcone_exit_radius_cm": "provenance of exterior_pn_column_lightcone",
+    "lightcone_exited": (
+        "provenance of exterior_pn_column_lightcone (1: light cone left the ejecta; "
+        "0: stopped at 100 r_h)"),
+    "pn_optical_depth": (
+        "legacy local depth n_b sigma_pn r/Gamma_a; 30-120 x the light-cone column near breakout"),
+    "gyration_parameter": "legacy baryon-target estimate",
+    "proton_number_density_cm3": "assumed free fraction times Ye rho/mp",
+    "downstream_temperature_kev": (
+        "legacy estimate (rho c^2 Gamma^2/a)^(1/4) without the jump-condition factor"),
+    "downstream_temperature_thermalised_kev": (
+        "fully thermalised downstream, lower limit on the immediate downstream temperature"),
+    "photon_rich_threshold_photons_per_baryon": (
+        "Ito et al. 2018/2020: the shock is photon-rich only above this upstream "
+        "photon-to-baryon ratio"),
+    "pair_loading_estimate": (
+        "Budnik et al. 2010 pairs per baryon in the immediate downstream of a photon-starved shock"),
+}
 COCOON_FIELDS = {
     "cocoon_radius_cm": "cm", "cocoon_energy_erg": "erg",
     "pressure_energy_erg": "erg", "cocoon_pressure_erg_cm3": "erg cm^-3",
@@ -44,6 +90,8 @@ SUMMARY_FIELDS = (
     "proton_number_density_cm3", "free_neutron_number_density_cm3",
     "neutron_to_proton_optical_depth", "proton_to_neutron_optical_depth",
     "gyration_parameter", "downstream_temperature_kev",
+    "exterior_pn_column_lightcone", "exterior_grey_optical_depth",
+    "downstream_temperature_thermalised_kev",
 )
 CHECK_FIELDS = (
     "upstream_density_g_cm3", "electron_fraction", "relative_lorentz_factor",
@@ -120,11 +168,27 @@ def build(model: Model, data_root: Path, *, fine: int = 0):
     )
 
 
-def sample_solution(jet: JetCocoon, trajectory: CocoonPropagationResult, count: int = 201):
-    """Select a reproducible physical time, independent of the integration step."""
-    start = trajectory.time_s[0]
-    stop = start + .99*(trajectory.time_s[-1]-start)
-    times = np.linspace(start, stop, count)
+def sample_times(start: float, breakout: float) -> np.ndarray:
+    """Union of UNIFORM_SAMPLES uniform times to UNIFORM_FRACTION of the propagation and
+    GEOMETRIC_SAMPLES times geometric in (t_bo - t)/(t_bo - t_0), deduplicated to 1e-12."""
+    span = breakout-start
+    uniform = np.linspace(start, start+UNIFORM_FRACTION*span, UNIFORM_SAMPLES)
+    geometric = breakout-np.geomspace(*GEOMETRIC_REMAINING, GEOMETRIC_SAMPLES)*span
+    times = np.sort(np.concatenate([uniform, geometric]))
+    keep = np.concatenate([[True], np.diff(times) > 1e-12*np.abs(times[1:])])
+    return times[keep]
+
+
+def sample_solution(jet: JetCocoon, trajectory: CocoonPropagationResult,
+                    count: int | None = None):
+    """Select reproducible physical times, independent of the integration step.
+
+    ``count=None`` gives the export sampling (:func:`sample_times`); an integer gives
+    ``count`` uniform times to UNIFORM_FRACTION only (the v3 grid, used by the playground).
+    """
+    start, stop = float(trajectory.time_s[0]), float(trajectory.time_s[-1])
+    times = (sample_times(start, stop) if count is None
+             else np.linspace(start, start+UNIFORM_FRACTION*(stop-start), count))
     radii = np.interp(times, trajectory.time_s, trajectory.radius_cm)
     width = np.interp(times, trajectory.time_s, trajectory.cocoon_radius_cm)
     energy = np.interp(times, trajectory.time_s, trajectory.cocoon_energy_erg)
@@ -193,9 +257,11 @@ def audit_model(coarse: tuple, fine: tuple) -> dict:
 def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: Path):
     ejecta, jet, trajectory, config, npc = solution
     group = handle.require_group("models").create_group(model.name)
-    group.attrs["npc_schema"] = "jetbns.npc-inputs.v4"
+    group.attrs["npc_schema"] = NPC_SCHEMA
     group.attrs["composition"] = "free-proton proxy plus Metzger free-neutron skin"
-    group.attrs["sample_fraction_of_propagation"] = .99
+    group.attrs["sample_fraction_of_propagation"] = 1-GEOMETRIC_REMAINING[1]
+    group.attrs["sampling"] = SAMPLING
+    group.attrs["grey_opacity_cm2_g"] = GREY_OPACITY_CM2_G
     group.attrs["breakout_time_s"] = trajectory.breakout_time_s
     group.attrs["breakout_radius_cm"] = trajectory.breakout_radius_cm
     group.attrs["sample_lag_before_breakout_s"] = trajectory.breakout_time_s-npc.time_s[-1]
@@ -223,7 +289,21 @@ def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: 
     group.attrs["engine_active_age_at_breakout_s"] = engine_age
     group.attrs["one_sided_energy_supplied_erg"] = engine_age*jet.engine.luminosity_erg_s
     columns = group.create_group("snapshot_columns")
-    for key, value in snapshot_columns(ejecta, config, npc.radius_cm[-1], npc.time_s[-1]).items():
+    # Kept at the v3 snapshot (the last uniform sample, UNIFORM_FRACTION of the propagation).
+    snapshot_time = trajectory.time_s[0]+UNIFORM_FRACTION*(trajectory.time_s[-1]
+                                                           -trajectory.time_s[0])
+    index = int(np.argmin(np.abs(npc.time_s-snapshot_time)))
+    if not np.isclose(npc.time_s[index], snapshot_time, rtol=1e-12, atol=0):
+        raise RuntimeError("snapshot_columns: the 99 % sample is missing")
+    columns.attrs["role"] = (
+        "legacy frozen-slice convention with Gamma_a (1-beta_a), undercounts by 1.8-5.3; "
+        "superseded by exterior_pn_column_lightcone")
+    columns.attrs["time_s"] = npc.time_s[index]
+    columns.attrs["radius_cm"] = npc.radius_cm[index]
+    columns.attrs["sample_index"] = index
+    columns.attrs["sample_fraction_of_propagation"] = UNIFORM_FRACTION
+    for key, value in snapshot_columns(ejecta, config, npc.radius_cm[index],
+                                       npc.time_s[index]).items():
         ds = columns.create_dataset(key, data=value)
         ds.attrs["unit"] = "1"
         ds.attrs["frame"] = "frozen lab-time radial profile; see PDF"
@@ -231,9 +311,8 @@ def write_model(handle, model: Model, solution: tuple, checks: dict, data_root: 
         ds = group.create_dataset(field.name, data=getattr(npc, field.name), compression="gzip")
         ds.attrs["unit"] = NPC_UNITS[field.name]
         ds.attrs["frame"] = field_frame(field.name)
-    group["pn_optical_depth"].attrs["role"] = "legacy total-baryon reference"
-    group["gyration_parameter"].attrs["role"] = "legacy baryon-target estimate"
-    group["proton_number_density_cm3"].attrs["role"] = "assumed free fraction times Ye rho/mp"
+    for key, role in FIELD_ROLES.items():
+        group[key].attrs["role"] = role
     for label, values in (("configuration", asdict(config)), ("engine", asdict(jet.engine)),
                           ("model_parameters", asdict(model)), ("convergence", checks)):
         settings = group.create_group(label)
@@ -298,6 +377,8 @@ def snapshot_columns(ejecta, config, radius, time) -> dict[str, float]:
 
 
 def field_frame(name: str) -> str:
+    if name in FIELD_FRAMES:
+        return FIELD_FRAMES[name]
     if name == "shock_beta_downstream_frame":
         return "downstream fluid rest"
     if name == "shock_beta_upstream_frame":
@@ -425,12 +506,20 @@ def main():
                     (ROOT/f"src/jetbns/{source}.py").read_bytes()).hexdigest()
             handle.attrs["status"] = "resolution-tested scenarios; approximate composition"
             handle.attrs["supersedes"] = (
-                "v1: unresolved launch history; v2: conical propagation without cocoon"
+                "v1: unresolved launch history; v2: conical propagation without cocoon; "
+                "v3: 201 uniform samples, local depths only, no radiation state"
             )
             handle.attrs["optical_depth_definition"] = (
-                "local n sigma r/Gamma_a, not integrated column"
+                "exterior_pn_column_lightcone: integrated p-n column along the light cone "
+                "(primary conversion depth); pn_optical_depth and "
+                "neutron_to_proton/proton_to_neutron_optical_depth: local n sigma r/Gamma_a, "
+                "not integrated columns"
             )
-            handle.attrs["snapshot_fraction"] = .99
+            handle.attrs["snapshot_fraction"] = UNIFORM_FRACTION
+            handle.attrs["sampling"] = SAMPLING
+            handle.attrs["pair_regulated_temperature_kev"] = np.array(
+                PAIR_REGULATED_TEMPERATURE_KEV)
+            handle.attrs["radiation_state_note"] = RADIATION_STATE_NOTE
             for model in models:
                 coarse = solve(model, args.data_root)
                 for level in range(1, 4):
@@ -452,6 +541,7 @@ def main():
                       f"Gamma_rel={row['relative_lorentz_factor']:.3g}; "
                       f"tau_np={row['neutron_to_proton_optical_depth']:.3g}; "
                       f"tau_pn={row['proton_to_neutron_optical_depth']:.3g}; "
+                      f"col_lightcone={row['exterior_pn_column_lightcone']:.4g}; "
                       f"max error={error:.2%}", flush=True)
             summary = handle.create_group("prebreakout_summary")
             summary.create_dataset("name", data=[r["name"] for r in rows],

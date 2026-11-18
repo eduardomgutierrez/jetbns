@@ -37,6 +37,9 @@ BETHE_HEITLER_WIEN_FACTOR = 6.0
 DEFAULT_MAGNETIC_FIELD_G = 1.0e13
 DEFAULT_MAGNETIC_RADIUS_CM = 1.0e6
 ERG_PER_KEV = 1.602176634e-9
+GREY_OPACITY_CM2_G = 0.16  # breakout-criterion grey opacity (JetCocoon.breakout_opacity_cm2_g default)
+STATIC_COLUMN_SAMPLES = 1536  # geometric radial points of the frozen-slice exterior integrals
+PAIR_LOADING_PER_SHOCK_LORENTZ_FACTOR = 100.0  # Budnik et al. 2010: pairs per baryon ~ 100 gamma_u
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,14 @@ NPC_UNITS = {
     "shock_beta_upstream_frame": "1",
     "shock_beta_downstream_frame": "1",
     "hydrodynamic_compression_ratio": "1",
+    "exterior_pn_column_lightcone": "1",
+    "exterior_pn_column_static": "1",
+    "exterior_grey_optical_depth": "1",
+    "lightcone_exit_radius_cm": "cm",
+    "lightcone_exited": "1",
+    "downstream_temperature_thermalised_kev": "keV",
+    "photon_rich_threshold_photons_per_baryon": "1",
+    "pair_loading_estimate": "1",
     "time_s": "s",
     "radius_cm": "cm",
     "head_beta": "1",
@@ -168,6 +179,14 @@ class NpcInputs:
     shock_beta_upstream_frame: FloatArray
     shock_beta_downstream_frame: FloatArray
     hydrodynamic_compression_ratio: FloatArray
+    exterior_pn_column_lightcone: FloatArray
+    exterior_pn_column_static: FloatArray
+    exterior_grey_optical_depth: FloatArray
+    lightcone_exit_radius_cm: FloatArray
+    lightcone_exited: NDArray[np.int8]
+    downstream_temperature_thermalised_kev: FloatArray
+    photon_rich_threshold_photons_per_baryon: FloatArray
+    pair_loading_estimate: FloatArray
 
     def to_hdf5(
         self,
@@ -179,7 +198,7 @@ class NpcInputs:
         """Write a portable HDF5 table with per-dataset units and assumptions."""
         with h5py.File(path, "w") as handle:
             handle.attrs["description"] = "Deterministic inputs for an external NPC Monte Carlo"
-            handle.attrs["schema"] = "jetbns.npc-inputs.v4"
+            handle.attrs["schema"] = "jetbns.npc-inputs.v5"
             handle.attrs["source_equations"] = (
                 "Kashiyama, Murase & Meszaros (2013), equation 7; "
                 "Metzger et al. (2015), free-neutron skin prescription; "
@@ -238,6 +257,7 @@ def evaluate_npc_inputs(
     config: NpcConfig | None = None,
     observer_lorentz_factor: ArrayLike | None = None,
     include_breakout: bool = False,
+    grey_opacity_cm2_g: float = GREY_OPACITY_CM2_G,
 ) -> NpcInputs:
     r"""Derive NPC quantities along a solved jet-head trajectory.
 
@@ -252,7 +272,26 @@ def evaluate_npc_inputs(
     side of the event; the upstream column is still finite there. A supplied
     observer Lorentz factor may be scalar or broadcastable to the retained
     trajectory; otherwise the jet-head Lorentz factor is used.
+
+    Exterior columns (np-converter decision 2026-11-18), evaluated at every
+    sample: ``exterior_pn_column_lightcone`` is the all-baryon p--n column along
+    the light cone of an outgoing particle (:func:`jetbns.columns.lightcone_column`,
+    the primary conversion depth); ``exterior_pn_column_static`` and
+    ``exterior_grey_optical_depth`` integrate ``(rho/m_p) sigma_pn`` and
+    ``kappa rho`` (``kappa = grey_opacity_cm2_g``) on the frozen lab-time slice
+    from the head to ``optical_depth_outer_radius(t)`` with
+    ``STATIC_COLUMN_SAMPLES`` geometric points and the trapezoid rule.
+
+    Downstream radiation state: ``downstream_temperature_thermalised_kev`` is
+    ``k_B (e_d/a_rad)^(1/4)`` with the jump-condition energy density
+    ``e_d = (Gamma_rel - 1)(4 Gamma_rel + 3) rho_u c^2`` (adiabatic index 4/3),
+    a lower limit on the immediate downstream temperature;
+    ``photon_rich_threshold_photons_per_baryon = (m_p/m_e) gamma_u`` (Ito et
+    al. 2018/2020) and ``pair_loading_estimate = 100 gamma_u`` (Budnik et al.
+    2010), with ``gamma_u`` the shock Lorentz factor in the upstream frame.
     """
+    from .columns import lightcone_column  # deferred: columns imports PN_CROSS_SECTION from here
+
     if config is None:
         config = NpcConfig()
     stop = -1 if result.broke_out and not include_breakout else None
@@ -367,6 +406,40 @@ def evaluate_npc_inputs(
     downstream_four_speed = np.sqrt(shock_u_squared) / compression
     shock_beta_downstream = downstream_four_speed / np.sqrt(1 + downstream_four_speed**2)
 
+    if not np.isfinite(grey_opacity_cm2_g) or grey_opacity_cm2_g <= 0:
+        raise ValueError("grey_opacity_cm2_g must be finite and positive")
+    lightcone = [
+        lightcone_column(ejecta, float(r), float(t), pn_cross_section_cm2=config.pn_cross_section_cm2)
+        for r, t in zip(radius, time, strict=True)
+    ]
+    column_lightcone = np.array([c.col_b_lightcone for c in lightcone])
+    exit_radius = np.array([c.exit_radius_cm for c in lightcone])
+    exited = np.array([c.exited for c in lightcone], dtype=np.int8)
+    column_static = np.empty_like(radius)
+    grey_depth = np.empty_like(radius)
+    for i, (r, t) in enumerate(zip(radius, time, strict=True)):
+        outer = float(ejecta.optical_depth_outer_radius(float(t)))
+        if r >= outer:
+            column_static[i] = grey_depth[i] = 0.0
+            continue
+        grid = np.geomspace(r, outer, STATIC_COLUMN_SAMPLES)
+        rho = np.asarray(ejecta.density(grid, float(t)), dtype=float)
+        column_static[i] = np.trapezoid(rho / PROTON_MASS * config.pn_cross_section_cm2, grid)
+        grey_depth[i] = np.trapezoid(grey_opacity_cm2_g * rho, grid)
+    if np.any(~np.isfinite(column_static) | (column_static < 0)
+              | ~np.isfinite(grey_depth) | (grey_depth < 0)):
+        raise ValueError("exterior columns must be finite and nonnegative")
+
+    downstream_energy_density = (
+        (relative_gamma - 1) * (4 * relative_gamma + 3) * density * SPEED_OF_LIGHT**2
+    )
+    thermalised_kev = (
+        BOLTZMANN_CONSTANT * (downstream_energy_density / RADIATION_CONSTANT) ** 0.25 / ERG_PER_KEV
+    )
+    shock_gamma_upstream = 1.0 / np.sqrt(1.0 - shock_beta**2)
+    photon_rich_threshold = PROTON_MASS / ELECTRON_MASS * shock_gamma_upstream
+    pair_loading = PAIR_LOADING_PER_SHOCK_LORENTZ_FACTOR * shock_gamma_upstream
+
     return NpcInputs(
         time,
         radius,
@@ -403,4 +476,12 @@ def evaluate_npc_inputs(
         shock_beta,
         shock_beta_downstream,
         compression,
+        column_lightcone,
+        column_static,
+        grey_depth,
+        exit_radius,
+        exited,
+        thermalised_kev,
+        photon_rich_threshold,
+        pair_loading,
     )

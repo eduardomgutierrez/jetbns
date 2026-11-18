@@ -11,6 +11,7 @@ from .ejecta import (
     OutflowHistory,
     lorentz_factor,
 )
+from .columns import LightconeColumn, lightcone_column
 from .engines import ConstantEngine, Engine, PowerLawEngine
 from .npc import (
     NpcConfig,
@@ -32,6 +33,7 @@ __all__ = [
     "HomologousShell",
     "HomologousTail",
     "JetHead",
+    "LightconeColumn",
     "JetCocoon",
     "NumericalEjecta",
     "NpcConfig",
@@ -40,6 +42,7 @@ __all__ = [
     "PowerLawEngine",
     "PropagationResult",
     "evaluate_npc_inputs",
+    "lightcone_column",
     "lorentz_factor",
     "metzger_free_neutron_fraction",
     "relative_lorentz_factor",

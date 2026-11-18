@@ -115,8 +115,8 @@ def plot_comparison(input_path: Path, output_dir: Path) -> list[Path]:
     written: list[Path] = []
     pdf_path = output_dir / "npc_all_models_comparison.pdf"
     with h5py.File(input_path) as handle, PdfPages(pdf_path) as pdf:
-        if handle.attrs.get("schema") != "jetbns.npc-model-export.v3":
-            raise ValueError("Expected a jetbns.npc-model-export.v3 file")
+        if handle.attrs.get("schema") != "jetbns.npc-model-export.v4":
+            raise ValueError("Expected a jetbns.npc-model-export.v4 file")
         names = list(handle["prebreakout_summary/name"].asstr()[:])
         groups = {name: handle[f"models/{name}"] for name in names}
         colors = plt.get_cmap("tab10")(np.linspace(0, 0.8, len(names)))

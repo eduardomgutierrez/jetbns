@@ -12,11 +12,16 @@ This package contains \field{npc_prebreakout_models.h5}. It has six
 pre-breakout jet/ejecta calculations: \field{ana_reference},
 \field{ana_neutron_rich}, \field{ana_steeper_tail}, \field{num_dd2_equal},
 \field{num_sfho}, and \field{num_sly}. The time coordinate is in the lab
-frame. Each model has 201 samples ending shortly before its breakout time.
+frame. Each model has 261 samples (attribute \field{sampling}): 201 uniform
+in time from the launch $t_0$ to $0.99$ of the propagation, plus 60 with
+$(t_{\rm bo}-t)/(t_{\rm bo}-t_0)$ geometric from $0.3$ to $10^{-4}$, merged.
+The last sample lies at $10^{-4}$ of the propagation before breakout.
 
+\begin{sloppypar}
 The HDF5 file is self-describing: every dataset has \field{unit} and
 \field{frame} attributes. The file schema is
-\field{jetbns.npc-model-export.v3}.
+\field{jetbns.npc-model-export.v4} (per-model \field{jetbns.npc-inputs.v5}).
+\end{sloppypar}
 
 \section*{Reading a model}
 
@@ -35,6 +40,7 @@ with h5py.File("npc_prebreakout_models.h5", "r") as f:
     B = g["upstream_magnetic_field_g"][:]
     tau_np = g["neutron_to_proton_optical_depth"][:]
     tau_pn = g["proton_to_neutron_optical_depth"][:]
+    col_lc = g["exterior_pn_column_lightcone"][:]
 
     t_bo = g.attrs["breakout_time_s"]
     r_bo = g.attrs["breakout_radius_cm"]
@@ -54,11 +60,66 @@ ambient_beta                 jet_head_beta
 shock_beta_upstream_frame    shock_beta_downstream_frame
 effective_path_length_upstream_cm
 downstream_temperature_kev   gyration_parameter
+exterior_pn_column_static    exterior_grey_optical_depth
+lightcone_exit_radius_cm     lightcone_exited
+downstream_temperature_thermalised_kev
+photon_rich_threshold_photons_per_baryon
+pair_loading_estimate
 \end{verbatim}
 
-The group \field{jet_cocoon} contains the cocoon radius, energy, pressure,
+Datasets that carry a convention also have a \field{role} attribute. The
+group \field{jet_cocoon} contains the cocoon radius, energy, pressure,
 deposition rate, jet area, and jet opening angle. The group
-\field{snapshot_columns} contains frozen radial-column diagnostics.
+\field{snapshot_columns} keeps the legacy frozen-slice columns at the
+$0.99$ sample; they use the factor $\Gamma_a(1-\beta_a)$ on a frozen profile,
+undercount the light-cone column by $1.8$--$5.3$, and are superseded by
+\field{exterior_pn_column_lightcone}.
+
+\section*{Exterior columns}
+
+The conversion depth for the Monte Carlo is the all-baryon $pn$ column met by
+a particle that leaves the jet head at $(r_h,t)$ and moves radially outward at
+$c$,
+\[
+\tau_{\rm lc}=\int_{r_h}^{r_{\rm exit}}\frac{\rho(r,t_r)}{m_p}\,\sigma_{pn}\,
+\Gamma_a(1-\beta_a)\,dr, \qquad t_r=t+\frac{r-r_h}{c},
+\]
+with $\rho$ the proper density, $\beta_a$ the lab-frame ejecta speed at
+$(r,t_r)$, and $r_{\rm exit}$ the radius where the light cone leaves the
+ejecta (\field{lightcone_exit_radius_cm}). If it has not left them at
+$100\,r_h$ the integral stops there and \field{lightcone_exited} is 0. For a
+steady wind $\tau_{\rm lc}=n_u\sigma_{pn}r/(2\Gamma_a)$. The grid has 512
+points geometric in $r-r_h$. Two frozen-slice integrals at lab time $t$, from
+$r_h$ to the outer ejecta radius (1536 geometric points), are given for
+reference:
+\[
+\tau_{\rm static}=\int\frac{\rho}{m_p}\sigma_{pn}\,dr, \qquad
+\tau_{\rm grey}=\int\kappa\rho\,dr,\quad \kappa=0.16~{\rm cm^2\,g^{-1}}.
+\]
+$\tau_{\rm grey}$ is the depth of the breakout criterion
+$\tau_{\rm grey}=1/\beta'_s$; it is close to 1 at the last sample. The legacy
+local depth \field{pn_optical_depth} $=n_b\sigma_{pn}r/\Gamma_a$ is
+30--120 times $\tau_{\rm lc}$ near breakout.
+
+\section*{Downstream radiation state}
+
+\begin{sloppypar}
+\field{downstream_temperature_thermalised_kev} is $k_BT$ for a fully
+thermalised downstream, $aT^4=e_d$ with the jump-condition energy density
+$e_d=(\Gamma_{\rm rel}-1)(4\Gamma_{\rm rel}+3)\rho_uc^2$ (adiabatic index
+$4/3$); it is $\simeq4^{1/4}$ times the legacy
+\field{downstream_temperature_kev} and a lower limit on the immediate
+downstream temperature.
+\field{photon_rich_threshold_photons_per_baryon} $=(m_p/m_e)\gamma_u$, with
+$\gamma_u$ the shock Lorentz factor in the upstream frame, is the upstream
+photon-to-baryon ratio above which the shock is photon-rich (Ito et al.
+2018, 2020); \field{pair_loading_estimate} $=100\gamma_u$ is the number of
+pairs per baryon in the immediate downstream of a photon-starved shock
+(Budnik et al. 2010). The file attribute \field{radiation_state_note} states
+the convention: the jet-head shock in merger ejecta is photon-starved, and the
+immediate downstream is expected at 100--200 keV with pair loading
+(\field{pair_regulated_temperature_kev}).
+\end{sloppypar}
 
 \section*{Density and optical-depth convention}
 

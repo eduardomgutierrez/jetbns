@@ -13,6 +13,11 @@ NPC_CONVERGENCE_FIELDS = (
     "relative_lorentz_factor", "neutron_to_proton_optical_depth",
     "proton_to_neutron_optical_depth", "breakout_condition",
 )
+SCHEMA = "jetbns.npc-model-export.v4"
+PROTON_MASS = 1.67262192369e-24  # g, jetbns.constants.PROTON_MASS
+NEW_COLUMNS = (
+    "exterior_pn_column_lightcone", "exterior_pn_column_static", "exterior_grey_optical_depth",
+)
 COCOON_CONVERGENCE_FIELDS = (
     "cocoon_energy_erg", "cocoon_radius_cm",
     "cocoon_pressure_erg_cm3", "jet_cross_section_cm2",
@@ -22,7 +27,7 @@ COCOON_CONVERGENCE_FIELDS = (
 def validate(path: str | Path) -> list[str]:
     """Reject stale schemas, malformed arrays, and inconsistent target depths."""
     with h5py.File(path) as handle:
-        if handle.attrs.get("schema") != "jetbns.npc-model-export.v3":
+        if handle.attrs.get("schema") != SCHEMA:
             raise ValueError("Unsupported/stale export: regenerate with the audited pipeline")
         names = list(handle["models"])
         summary = handle["prebreakout_summary"]
@@ -66,6 +71,26 @@ def validate(path: str | Path) -> list[str]:
                 if np.any(values < 0):
                     raise ValueError(f"{name}/{key}: negative value")
             cfg = g["configuration"].attrs
+            if "sampling" not in g.attrs:
+                raise ValueError(f"{name}: missing sampling attribute")
+            for key in NEW_COLUMNS:
+                if key not in g:
+                    raise ValueError(f"{name}/{key}: missing exterior column")
+                values = g[key][:]
+                if np.any(~np.isfinite(values)) or np.any(values < 0):
+                    raise ValueError(f"{name}/{key}: invalid exterior column")
+            lightcone = g["exterior_pn_column_lightcone"][:]
+            tail = lightcone[-int(np.ceil(.3*t.size)):]
+            if np.any(np.diff(tail) > 0):
+                raise ValueError(f"{name}: light-cone column increases over the last 30 % of samples")
+            grey = g["exterior_grey_optical_depth"][:]
+            ratio = cfg["pn_cross_section_cm2"]/(g.attrs["grey_opacity_cm2_g"]*PROTON_MASS)
+            thick = grey > 1e-6
+            if not np.allclose(g["exterior_pn_column_static"][:][thick], ratio*grey[thick],
+                               rtol=1e-6, atol=0):
+                raise ValueError(f"{name}: static column and grey depth disagree")
+            if not .5 <= grey[-1] <= 2.:
+                raise ValueError(f"{name}: last grey depth {grey[-1]:.3g} not near breakout")
             length = g["effective_path_length_upstream_cm"][:]
             if not np.allclose(length, g["path_length_cm"][:]/g["ambient_lorentz_factor"][:]):
                 raise ValueError(f"{name}: effective length mismatch")

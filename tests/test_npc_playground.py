@@ -48,7 +48,7 @@ def test_playground_save_preserves_config_and_does_not_overwrite(playground, tmp
         np.testing.assert_array_equal(
             handle["relative_lorentz_factor"], run.npc.relative_lorentz_factor
         )
-        assert handle.attrs["schema"] == "jetbns.npc-inputs.v4"
+        assert handle.attrs["schema"] == "jetbns.npc-inputs.v5"
         assert "exploratory" in handle["metadata"].attrs["status"]
     with h5py.File(paths[1]) as handle:
         assert handle.attrs["time_step_s"] == run.time_step_s
