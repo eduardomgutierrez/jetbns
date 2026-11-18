@@ -117,3 +117,120 @@ def test_no_injection_after_engine_switches_off():
                       base_radius_cm=engine.launch_radius_cm)
     assert state.deposition_rate_erg_s == 0.
     assert state.lateral_beta > 0.
+
+
+# Reconfinement root search (WP4 audit, 2026-11-18): the area must not switch
+# to the conical value while a root exists inside the ejecta.
+TIME = 2.3
+
+
+def collimation_setup():
+    ejecta = HomologousTail(mass_msun=1e-4)
+    engine = ConstantEngine.from_isotropic_equivalent(
+        1e51, launch_time_s=1., launch_radius_cm=8.45e7,
+        opening_angle_rad=np.deg2rad(10), lorentz_factor=100.)
+    jet = JetCocoon(engine, ejecta)
+    radius = .6*ejecta.outer_radius(TIME)
+    return jet, radius, engine.launch_radius_cm
+
+
+def pressure_for_scale(jet, radius, scale):
+    luminosity = float(jet.engine.luminosity(radius, TIME))
+    return luminosity/(np.pi*jet.engine.beta*C*scale**2)
+
+
+def residuals(jet, heights, pressure, base, radius):
+    angle = jet.engine.opening_angle_rad
+    luminosity = float(jet.engine.luminosity(radius, TIME))
+    scale = np.sqrt(luminosity/(np.pi*jet.engine.beta*C*pressure))
+    beta = np.asarray(jet.ejecta.velocity(np.asarray(heights)/np.cos(angle), TIME))/C
+    return heights-base-np.maximum(jet.engine.beta-beta, 0)*scale
+
+
+def scanned_root(jet, pressure, base, radius, top):
+    """Brute-force first sign change of the residual on [base, top], refined by zoomed scans."""
+    lower, upper = base, top
+    for _ in range(6):
+        heights = np.linspace(lower, upper, 2001)
+        positive = residuals(jet, heights, pressure, base, radius) > 0
+        if not positive.any():
+            return None
+        k = int(np.argmax(positive))
+        if k == 0:
+            return heights[0]
+        lower, upper = heights[k-1], heights[k]
+    return .5*(lower+upper)
+
+
+def shipped_cross_section(jet, radius, time, pressure, base):
+    """The cross_section shipped before 2026-11-18 (bisection on [z_0, 2 z_h - z_0], 28 steps)."""
+    angle = jet.engine.opening_angle_rad
+    luminosity = float(jet.engine.luminosity(radius, time))
+    if pressure <= 0 or luminosity <= 0:
+        return float(np.pi*(radius*np.tan(angle))**2)
+    scale = np.sqrt(luminosity/(np.pi*jet.engine.beta*C*pressure))
+
+    def residual(height):
+        beta = float(jet.ejecta.velocity(height/np.cos(angle), time))/C
+        return height-base-max(jet.engine.beta-beta, 0)*scale
+
+    lower, upper = base, 2*radius-base
+    if residual(upper) <= 0:
+        collimation_height = radius
+    else:
+        for _ in range(28):
+            middle = (lower+upper)/2
+            if residual(middle) > 0:
+                upper = middle
+            else:
+                lower = middle
+        collimation_height = .5*(base+.5*(lower+upper))
+    return float(np.pi*(collimation_height*np.tan(angle))**2)
+
+
+def test_cross_section_is_continuous_beyond_half_the_ejecta():
+    jet, radius, base = collimation_setup()
+    angle = jet.engine.opening_angle_rad
+    edge = jet.ejecta.outer_radius(TIME)*np.cos(angle)
+    assert 2*radius-base > edge  # the old upper bracket lies outside the ejecta
+    critical = pressure_for_scale(jet, radius, (2*radius-base)/jet.engine.beta)
+    pressures = critical*1.01**np.arange(-80, 81)
+    areas = np.array([jet.cross_section(radius, TIME, p, base) for p in pressures])
+    assert np.max(np.abs(np.diff(areas)/areas[:-1])) < .05
+    below = 0
+    for pressure, area in zip(pressures[::5], areas[::5]):
+        # Scan up to the ejecta edge; roots above the head leave the jet conical at z_h.
+        root = scanned_root(jet, pressure, base, radius, edge*(1-1e-12))
+        assert root is not None
+        below += root < radius
+        expected = np.pi*(min(.5*(base+root), radius)*np.tan(angle))**2
+        assert area == pytest.approx(expected, rel=1e-6)
+    assert below >= 5  # the grid contains collimated heads (root below z_h)
+    # The shipped bracket switched to the conical area inside this range.
+    old = np.array([shipped_cross_section(jet, radius, TIME, p, base) for p in pressures])
+    assert np.max(np.abs(np.diff(np.log(old)))) > np.log(2.)
+
+
+def test_cross_section_matches_shipped_bisection_where_it_was_right():
+    jet, radius, base = collimation_setup()
+    pressure = pressure_for_scale(jet, radius, radius/jet.engine.beta)
+    luminosity = float(jet.engine.luminosity(radius, TIME))
+    scale = np.sqrt(luminosity/(np.pi*jet.engine.beta*C*pressure))
+    assert residuals(jet, np.array([radius]), pressure, base, radius)[0] > 0
+    assert jet.engine.beta*scale < 2*radius-base
+    assert jet.cross_section(radius, TIME, pressure, base) == pytest.approx(
+        shipped_cross_section(jet, radius, TIME, pressure, base), rel=1e-8)
+
+
+def test_cross_section_is_conical_without_a_root_inside_the_ejecta():
+    jet, radius, base = collimation_setup()
+    angle = jet.engine.opening_angle_rad
+    edge = jet.ejecta.outer_radius(TIME)*np.cos(angle)
+    beta_edge = jet.ejecta.limit_beta
+    # (beta_j - beta_edge) * scale > edge - z_0: the residual is negative up to the edge.
+    scale = 2*(edge-base)/(jet.engine.beta-beta_edge)
+    pressure = pressure_for_scale(jet, radius, scale)
+    heights = np.linspace(base, edge*(1-1e-9), 20001)
+    assert np.all(residuals(jet, heights, pressure, base, radius) <= 0)
+    assert jet.cross_section(radius, TIME, pressure, base) == pytest.approx(
+        np.pi*(radius*np.tan(angle))**2, rel=1e-12)

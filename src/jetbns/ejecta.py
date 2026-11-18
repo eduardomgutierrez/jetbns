@@ -527,7 +527,15 @@ class NumericalEjecta(Ejecta):
         if upper > last_time:
             # Resolve both recent slow material and the start of extrapolation.
             flight = np.geomspace(time - upper, time - last_time, self.integration_samples)
-            launch_time = np.unique(np.concatenate((measured, time - flight)))
+            # The continued rate falls as (t/t_last)^-a on the scale t_last, while
+            # the flight grid spaces launches by ~ln(1e6)/N of the age; resolve the
+            # start of the continuation geometrically in (t - t_last) from
+            # 1e-6 t_last (the record's own time scale) to the newest launch.
+            span = upper - last_time
+            since_record = np.geomspace(min(last_time * 1e-6, span), span, self.integration_samples)
+            launch_time = np.unique(
+                np.concatenate((measured, time - flight, last_time + since_record))
+            )
         else:
             launch_time = np.unique(measured)
         mass_rate = np.interp(

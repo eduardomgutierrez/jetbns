@@ -135,3 +135,43 @@ def test_hdf5_loader_is_the_persisted_input_path(tmp_path) -> None:
 def test_invalid_parameters_are_rejected(constructor) -> None:
     with pytest.raises(ValueError):
         constructor()
+
+
+# Mass launched after the end of the record (WP4 audit, 2026-11-18).
+def short_record_history() -> OutflowHistory:
+    time = np.linspace(0.01, 0.03, 40)
+    return OutflowHistory(
+        time_s=time,
+        velocity_c=np.linspace(0.5, 0.2, 40),
+        mass_loss_rate_g_s=np.geomspace(1e31, 3e30, 40),
+        electron_fraction=np.full(40, 0.3),
+        solid_angle_sr=0.0119,
+    )
+
+
+def launched_mass(model: NumericalEjecta, time: float) -> float:
+    """Analytic mass launched before ``time``: recorded trapezoid plus the power-law continuation."""
+    history = model.history
+    scale = 4.0 * np.pi / history.solid_angle_sr
+    recorded = np.trapezoid(history.mass_loss_rate_g_s, history.time_s) * scale
+    last, a = history.time_s[-1], model.post_simulation_mass_index
+    continued = history.mass_loss_rate_g_s[-1] * scale * last / (a - 1) * (1 - (last / time) ** (a - 1))
+    return recorded + continued
+
+
+def enclosed_mass(model: NumericalEjecta, time: float) -> float:
+    return model.mass_above(model.inner_radius(time) * 1.0001, time, samples=4096)
+
+
+@pytest.mark.parametrize("samples", [512, 256])
+@pytest.mark.parametrize("time", [1.0, 2.0, 4.0, 8.0])
+def test_numerical_mass_after_record_is_conserved(samples: int, time: float) -> None:
+    model = NumericalEjecta(short_record_history(), cutoff_mode="smooth", integration_samples=samples)
+    assert enclosed_mass(model, time) == pytest.approx(launched_mass(model, time), rel=0.01)
+
+
+@pytest.mark.parametrize("time", [1.0, 8.0])
+def test_numerical_mass_after_record_converges_in_launch_samples(time: float) -> None:
+    coarse = NumericalEjecta(short_record_history(), cutoff_mode="smooth", integration_samples=256)
+    fine = NumericalEjecta(short_record_history(), cutoff_mode="smooth", integration_samples=4096)
+    assert enclosed_mass(coarse, time) == pytest.approx(enclosed_mass(fine, time), rel=0.01)
