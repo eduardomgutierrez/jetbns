@@ -679,3 +679,59 @@ class NumericalEjecta(Ejecta):
             )
             outputs[3, start:start + 32] = lab.sum(axis=1) / area
         return tuple(_return_like_input(a.reshape(radius_array.shape), radius) for a in outputs)
+
+
+@dataclass(frozen=True)
+class HomologousShell(Ejecta):
+    """Homologous single power law rho ∝ r^-n on [x r_max(t), r_max(t)], normalised to M over 4 pi (proper density
+    integrated over lab volume, as N14 Eq. 4); r_max(t) = r_max,ref + beta_max c (t - t_ref).
+
+    Used for the Table A.1 benchmark (Nagakura et al. 2014 Eqs. 1-5; Gottlieb et al. 2018 Sect. 2).
+
+    `inner_radius` is the fixed jet-injection radius (`floor_radius_cm`); between it and the shell's inner edge
+    x r_max(t) the density is zero. Velocity is beta_max c r / r_max(t) up to r_max(t) and zero outside.
+    """
+
+    mass_msun: float
+    max_beta: float
+    reference_time_s: float
+    reference_outer_radius_cm: float
+    shell_ratio: float          # r_in / r_max, constant in homologous expansion
+    floor_radius_cm: float
+    density_index: float = 3.5
+    fill_to_floor: bool = False  # continue the power law (same edge density) down to floor_radius_cm
+
+    def __post_init__(self) -> None:
+        if not (0 < self.max_beta < 1 and self.mass_msun > 0 and 0 < self.shell_ratio < 1):
+            raise ValueError("invalid shell parameters")
+        if self.density_index == 3:
+            raise ValueError("density_index 3 needs a logarithmic normalisation")
+
+    def outer_radius(self, time: float) -> float:
+        return self.reference_outer_radius_cm + self.max_beta * SPEED_OF_LIGHT * (time - self.reference_time_s)
+
+    def shell_inner_radius(self, time: float) -> float:
+        return self.shell_ratio * self.outer_radius(time)
+
+    def inner_radius(self, time: float) -> float:
+        return self.floor_radius_cm
+
+    def edge_density(self, time: float) -> float:
+        """Density at r_max(t) in g cm^-3."""
+        n, x = self.density_index, self.shell_ratio
+        outer = self.outer_radius(time)
+        return self.mass_msun * SOLAR_MASS * (3 - n) / (4 * np.pi * outer**3 * (1 - x ** (3 - n)))
+
+    def density(self, radius, time):
+        r = np.asarray(radius, dtype=float)
+        outer = self.outer_radius(time)
+        start = self.floor_radius_cm if self.fill_to_floor else self.shell_inner_radius(time)
+        inside = (r >= start) & (r <= outer)
+        rho = np.where(inside, self.edge_density(time) * (np.where(inside, r, outer) / outer) ** -self.density_index, 0.)
+        return float(rho) if np.ndim(radius) == 0 else rho
+
+    def velocity(self, radius, time):
+        r = np.asarray(radius, dtype=float)
+        outer = self.outer_radius(time)
+        v = np.where((r >= 0) & (r <= outer), self.max_beta * SPEED_OF_LIGHT * r / outer, 0.)
+        return float(v) if np.ndim(radius) == 0 else v
