@@ -33,7 +33,7 @@ def test_appendix_suite_contains_published_configurations():
 
 
 # Reference numbers: variant "b" (exact homologous r^-3.5 shell, jetbns defaults, time step 1 ms) of
-# reduced/paper/audit/salafia.json in the np-converter repository, 2026-11-05.
+# reduced/paper/audit/salafia.json in the np-converter repository, 2026-11-05; M-th45 see its comment.
 # name -> (t_bo - t_inj [s], breakout radius [cm])
 AUDIT_VARIANT_B = {
     "A": (0.08558350648070577, 1122813728.21049),
@@ -42,7 +42,7 @@ AUDIT_VARIANT_B = {
     "M-ref": (0.3038437584729114, 4253270619.344437),
     "M-L4": (0.2207532677478417, 3256874522.203062),
     "M-th30": (0.9525315349501664, 12032138697.106567),
-    "M-th45": (3.3209842983254605, 40433907215.304016),
+    "M-th45": (4.760401154707643, 57694952671.81884),   # recomputed 2026-11-18 after the reconfinement-root fix (was 3.321 s, 4.043e10 cm with the shipped search, which switched this case to a conical jet)
     "M-ti500": (0.9808702663445852, 17768232370.47165),
     "M-M3": (0.11557689739624123, 1995631217.9503586),
     "M-M2-2": (0.4297681534917177, 5763317975.0837965),
